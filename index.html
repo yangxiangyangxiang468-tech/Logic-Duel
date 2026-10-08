@@ -1,0 +1,1050 @@
+<meta charset="utf-8">
+<title>ロジカル・カジノ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,600;6..96,800&family=Limelight&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: 一枚のカジノテーブル（左: フェルト卓 = 相手席 / ルーレット / 自分席、右: 推理アシストと記録） */
+:root {
+  --bg: #170d10;
+  --panel: #21141a;
+  --line: #3e2a30;
+  --felt: #4b1a24;
+  --felt-hi: #6c2734;
+  --ivory: #f2e9d8;
+  --ink: #2a1d1a;
+  --brass: #d6ad57;
+  --brass-dim: #8e7340;
+  --text: #f0e5d5;
+  --muted: #b5a193;
+  --danger: #e2594b;
+  --ok: #8cc0a2;
+  --f-display: "Limelight", "Bodoni Moda", Georgia, serif;
+  --f-num: "Bodoni Moda", Georgia, "Times New Roman", serif;
+  --f-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  background: radial-gradient(1200px 600px at 30% -10%, #2a1419 0%, var(--bg) 60%) var(--bg);
+  color: var(--text);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.6;
+  padding-inline: 16px;
+}
+button { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+.app { max-width: 1240px; margin: 0 auto; padding-block: 16px 40px; display: grid; gap: 16px; }
+
+/* header */
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.brand h1 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 30px; letter-spacing: .06em; color: var(--brass); line-height: 1.1; }
+.brand span { color: var(--muted); font-size: 13px; letter-spacing: .08em; }
+.top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.chip.on { border-color: var(--brass); color: var(--brass); }
+.chip.bad { border-color: var(--danger); color: var(--danger); }
+
+.btn { appearance: none; border: 1px solid var(--brass); background: var(--brass); color: var(--ink); font-weight: 700; padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: transform .12s, filter .12s; }
+.btn:hover { filter: brightness(1.08); }
+.btn:active { transform: translateY(1px); }
+.btn.ghost { background: transparent; color: var(--brass); }
+.btn.quiet { background: transparent; color: var(--muted); border-color: var(--line); font-weight: 500; }
+.btn[disabled] { opacity: .4; cursor: not-allowed; }
+.btn.sm { padding: 5px 10px; font-size: 13px; }
+
+/* board */
+.board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 350px); gap: 16px; align-items: start; }
+@media (max-width: 920px) { .board { grid-template-columns: minmax(0, 1fr); } }
+.felt {
+  background: radial-gradient(ellipse at 50% 45%, var(--felt-hi) 0%, var(--felt) 70%);
+  border: 1px solid var(--brass-dim);
+  border-radius: 22px;
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+  box-shadow: inset 0 0 0 6px rgba(0,0,0,.18), 0 20px 50px rgba(0,0,0,.35);
+  min-width: 0;
+}
+.seat { display: grid; gap: 8px; min-width: 0; }
+.seat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.seat-name { font-family: var(--f-display); font-size: 18px; letter-spacing: .08em; color: var(--ivory); margin-right: 4px; }
+.seat.turn .seat-name { color: var(--brass); }
+.zone { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; }
+.zone-label { font-size: 11px; letter-spacing: .16em; color: var(--muted); }
+.cards { display: flex; flex-wrap: wrap; gap: 6px; min-height: 64px; align-items: center; }
+.empty { color: var(--muted); font-size: 12px; opacity: .7; }
+
+.card {
+  position: relative; width: 46px; height: 64px; border-radius: 6px;
+  display: grid; place-items: center;
+  background: var(--ivory); color: var(--ink);
+  font-family: var(--f-num); font-weight: 800; font-size: 26px; line-height: 1;
+  border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 2px 0 rgba(0,0,0,.25);
+  font-variant-numeric: lining-nums;
+  padding: 0;
+}
+.card.back {
+  background:
+    repeating-linear-gradient(45deg, transparent 0 5px, rgba(214,173,87,.28) 5px 6px),
+    repeating-linear-gradient(-45deg, transparent 0 5px, rgba(214,173,87,.28) 5px 6px),
+    var(--felt);
+  border: 2px solid var(--ivory);
+  color: transparent;
+}
+.card.veiled { background: color-mix(in srgb, var(--ivory) 72%, var(--felt)); border: 1px dashed var(--ink); }
+.card .tag { position: absolute; top: 2px; left: 3px; font-family: var(--f-body); font-size: 9px; font-weight: 700; letter-spacing: .04em; color: var(--ink); opacity: .7; }
+.card.mine { box-shadow: 0 0 0 2px var(--brass), 0 2px 0 rgba(0,0,0,.25); }
+.card.mine::after { content: "地雷"; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); font-family: var(--f-body); font-size: 9px; font-weight: 700; background: var(--brass); color: var(--ink); padding: 0 4px; border-radius: 3px; letter-spacing: .05em; }
+.card.found { background: var(--danger); color: var(--ivory); }
+.card.found::after { content: "判明"; background: var(--danger); color: var(--ivory); position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); font-family: var(--f-body); font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 3px; border: 1px solid var(--ivory); }
+button.card { cursor: pointer; transition: transform .12s, box-shadow .12s; }
+button.card:hover { transform: translateY(-4px); }
+button.card.pickable { box-shadow: 0 0 0 2px var(--ok), 0 2px 0 rgba(0,0,0,.25); }
+button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass), 0 6px 14px rgba(0,0,0,.4); }
+.card.dim { opacity: .38; }
+
+/* center: wheel + action panel */
+.center { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: center; padding-block: 6px; border-block: 1px dashed rgba(214,173,87,.3); }
+@media (max-width: 620px) { .center { grid-template-columns: minmax(0, 1fr); justify-items: center; } }
+.wheel { position: relative; width: 176px; height: 176px; flex: none; }
+.wheel svg.disc { width: 100%; height: 100%; display: block; transition: transform 1.7s cubic-bezier(.15,.8,.2,1); }
+.wheel .pointer { position: absolute; top: -6px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-top: 18px solid var(--brass); filter: drop-shadow(0 2px 2px rgba(0,0,0,.5)); }
+.seg-a { fill: var(--felt); }
+.seg-b { fill: var(--ink); }
+.seg-line { stroke: var(--brass-dim); stroke-width: 1; fill: none; }
+.seg-num { fill: var(--ivory); font-family: var(--f-num); font-weight: 800; font-size: 17px; }
+.hub { fill: var(--brass); }
+.hub-in { fill: var(--ink); }
+.rim { fill: none; stroke: var(--brass); stroke-width: 4; }
+@media (prefers-reduced-motion: reduce) { .wheel svg.disc { transition: none; } button.card, .btn { transition: none; } }
+
+.panel { background: rgba(10, 4, 6, .38); border: 1px solid rgba(214,173,87,.25); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; width: 100%; }
+.prompt { font-size: 15px; font-weight: 500; }
+.prompt small { display: block; color: var(--muted); font-weight: 400; font-size: 12.5px; margin-top: 2px; }
+.prompt b { color: var(--brass); }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.numpad { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.numpad button { border: 1px solid var(--line); background: var(--ivory); color: var(--ink); border-radius: 8px; padding: 6px 0 4px; cursor: pointer; display: grid; gap: 0; line-height: 1.1; }
+.numpad button b { font-family: var(--f-num); font-size: 22px; font-weight: 800; }
+.numpad button span { font-family: var(--f-mono); font-size: 10.5px; color: #6d5a52; }
+.numpad button:hover:not([disabled]) { box-shadow: 0 0 0 2px var(--brass); }
+.numpad button[disabled] { opacity: .3; cursor: not-allowed; }
+.effect-card { display: flex; gap: 10px; align-items: center; }
+.effect-card .big { font-family: var(--f-num); font-weight: 800; font-size: 40px; color: var(--brass); line-height: 1; min-width: 36px; text-align: center; }
+
+/* side */
+.side { display: grid; gap: 16px; min-width: 0; }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.box h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 17px; letter-spacing: .1em; color: var(--brass); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.box h2 small { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: 0; }
+.note { color: var(--muted); font-size: 12.5px; }
+.prob { display: grid; gap: 4px; }
+.prow { display: grid; grid-template-columns: 26px minmax(0, 1fr) 44px; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
+.prow .n { font-family: var(--f-num); font-weight: 800; font-size: 18px; text-align: center; }
+.bar { position: relative; height: 18px; border-radius: 4px; background: rgba(255,255,255,.05); overflow: hidden; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--brass-dim), var(--brass)); border-radius: 4px; }
+.bar em { position: absolute; left: 6px; top: 0; font-style: normal; font-size: 10.5px; line-height: 18px; color: var(--text); letter-spacing: .03em; white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+.prow .pct { font-family: var(--f-mono); font-size: 12px; text-align: right; color: var(--muted); }
+.prow.zero .n, .prow.zero .pct { opacity: .35; }
+.prow.hot .pct { color: var(--brass); }
+.prow.dead .n { color: var(--danger); }
+.combos { display: flex; flex-wrap: wrap; gap: 6px; }
+.combo { font-family: var(--f-mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); background: rgba(255,255,255,.03); }
+.combo b { font-family: var(--f-num); font-size: 14px; color: var(--ivory); }
+.combo.top { border-color: var(--brass); }
+.meter { height: 6px; border-radius: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--danger); }
+.log { max-height: 280px; overflow-y: auto; display: grid; gap: 2px; font-size: 13px; padding-right: 4px; }
+.log div { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 6px; }
+.log .t { font-family: var(--f-mono); font-size: 11px; color: var(--muted); padding-top: 2px; }
+.log .me { color: var(--ivory); }
+.log .op { color: var(--muted); }
+.log .hit { color: var(--danger); font-weight: 700; }
+
+/* start screen */
+.start { display: grid; gap: 22px; padding-block: 12px; }
+.hero { display: grid; gap: 8px; max-width: 60ch; }
+.hero h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: clamp(34px, 7vw, 60px); color: var(--brass); letter-spacing: .05em; line-height: 1.05; text-wrap: balance; }
+.hero p { margin: 0; color: var(--muted); }
+.modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.mode { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 12px; align-content: start; }
+.mode h3 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 22px; letter-spacing: .08em; }
+.mode p { margin: 0; color: var(--muted); font-size: 13.5px; }
+.join { display: flex; gap: 8px; flex-wrap: wrap; }
+.join input { flex: 1 1 120px; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); font-family: var(--f-mono); font-size: 16px; letter-spacing: .2em; text-transform: uppercase; }
+.fan { display: flex; gap: 0; padding-left: 10px; }
+.fan .card { margin-left: -10px; transform: rotate(calc((var(--i) - 2) * 6deg)); transform-origin: bottom center; }
+.code { font-family: var(--f-mono); font-size: 28px; letter-spacing: .25em; color: var(--brass); }
+
+/* overlay */
+.overlay { position: fixed; inset: 0; background: rgba(8, 3, 5, .72); display: grid; place-items: center; padding: 16px; z-index: 20; }
+.sheet { background: var(--panel); border: 1px solid var(--brass-dim); border-radius: 16px; max-width: 640px; width: 100%; max-height: 86vh; overflow-y: auto; padding: 22px; display: grid; gap: 12px; }
+.sheet h2 { margin: 0; font-family: var(--f-display); font-weight: 400; color: var(--brass); letter-spacing: .08em; }
+.sheet h3 { margin: 6px 0 0; font-size: 15px; color: var(--ivory); }
+.sheet p, .sheet li { color: var(--text); font-size: 14px; }
+.sheet ol, .sheet ul { margin: 0; padding-left: 1.3em; display: grid; gap: 3px; }
+.sheet .fx { list-style: none; padding: 0; }
+.sheet .fx li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
+.sheet .fx b { font-family: var(--f-num); color: var(--brass); font-size: 17px; text-align: right; }
+.toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ivory); color: var(--ink); padding: 8px 16px; border-radius: 8px; font-weight: 500; z-index: 30; box-shadow: 0 8px 20px rgba(0,0,0,.4); max-width: calc(100% - 32px); }
+.result { font-family: var(--f-display); font-size: 30px; letter-spacing: .06em; color: var(--brass); }
+.result.lose { color: var(--muted); }
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand"><h1>LOGICAL CASINO</h1><span>ロジカル・ダイス・ポーカー</span></div>
+    <div class="top-actions" id="topActions"></div>
+  </header>
+  <main id="main"></main>
+</div>
+<div class="overlay" id="rules" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+// ---------- 定数 ----------
+const NUMS = [1,2,3,4,5,6,7,8,9,10];
+const EFFECTS = {
+  1: "相手の場の裏向きカードを1枚選んで表にする",
+  2: "相手の地雷2枚の合計値がわかる",
+  3: "相手が最後に出した裏向きカードを表にする",
+  4: "自分の手札1枚と場の裏向きカード1枚を入れ替える",
+  5: "相手が次に出すカードは偶数になる",
+  6: "相手が次に出すカードは奇数になる",
+  7: "数字を1つ指定し、相手のどこにあるか（手札／場）を聞く",
+  8: "数字を指定し、相手の場に裏向きであれば表にする（最大3回。外すと自分のカードが1枚公開）",
+  9: "お互いの場の裏向きカードを見せ合う（使わなくてもよい）",
+  10: "自分の場の裏向きカードを1枚手札に戻す",
+};
+const SHORT = {1:"1枚めくる",2:"合計ヒント",3:"最新を公開",4:"手札と入替",5:"相手→偶数",6:"相手→奇数",7:"場所を質問",8:"連続指名",9:"見せ合い",10:"手札に戻す"};
+const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
+
+// ---------- ゲームエンジン（純粋関数） ----------
+const clone = o => JSON.parse(JSON.stringify(o));
+const P = (s, i) => s["p" + i];
+const C = (p, n) => p.cards[n];
+const handOf = p => NUMS.filter(n => C(p, n).z === "h");
+const fieldOf = p => NUMS.filter(n => C(p, n).z === "f").sort((a, b) => C(p, a).o - C(p, b).o);
+const hiddenField = p => fieldOf(p).filter(n => !C(p, n).r);
+const isMine = (p, n) => p.mines.includes(n);
+const ep = p => p.trumpUsed ? 1 : 0;
+const parityOk = (n, par) => par === "even" ? n % 2 === 0 : n % 2 === 1;
+const bothReady = s => s.p0.ready && s.p1.ready;
+const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
+
+function newPlayer(uid) {
+  const cards = {};
+  for (const n of NUMS) cards[n] = { z: "h", r: false, o: 0 };
+  return { uid: uid || null, ready: false, mines: [], found: [], cards, seq: 0, trumpUsed: false, parity: null, facts: [], swapUnrev: null };
+}
+function newGame(mode, uid0, uid1) {
+  return { v: 1, mode, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
+}
+function addLog(s, e) { e.t = s.turnNo; s.log.push(e); if (s.log.length > 90) s.log.splice(0, s.log.length - 90); }
+function fail(msg) { const e = new Error(msg); e.user = true; throw e; }
+
+function reveal(s, owner, n, cause) {
+  const p = P(s, owner), c = C(p, n);
+  if (c.r) return;
+  c.r = true;
+  if (isMine(p, n) && !p.found.includes(n)) {
+    p.found.push(n);
+    p.facts.push({ t: "mine", n, e: ep(p) });
+    addLog(s, { k: "reveal", owner, n, mine: true, cause });
+    if (p.found.length >= 2) { s.phase = "over"; s.winner = 1 - owner; addLog(s, { k: "win", who: 1 - owner }); }
+  } else {
+    p.facts.push({ t: "not", n, e: ep(p) });
+    addLog(s, { k: "reveal", owner, n, mine: false, cause });
+  }
+}
+function penalty(s, who) {
+  const p = P(s, who);
+  const pool = NUMS.filter(n => !C(p, n).r && !isMine(p, n));
+  if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
+  reveal(s, who, rnd(pool), "penalty");
+}
+function endTurn(s) { s.turn = 1 - s.turn; s.turnNo++; s.step = "action"; s.pending = null; }
+function afterMain(s) {
+  if (s.phase === "over") return;
+  s.pending = null; s.step = "place";
+  if (!handOf(P(s, s.turn)).length) { addLog(s, { k: "nohand", who: s.turn }); endTurn(s); }
+}
+
+function startEffect(s, who, n) {
+  const me = P(s, who), op = P(s, 1 - who);
+  const pend = () => { s.step = "effect"; s.pending = { eff: n, left: n === 8 ? 3 : 0 }; };
+  const none = () => { addLog(s, { k: "none", who }); afterMain(s); };
+  switch (n) {
+    case 1: return hiddenField(op).length ? pend() : none();
+    case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return afterMain(s); }
+    case 3: {
+      const hf = hiddenField(op);
+      if (!hf.length) return none();
+      reveal(s, 1 - who, hf[hf.length - 1], "e3");
+      return afterMain(s);
+    }
+    case 4: return handOf(me).length && hiddenField(me).length ? pend() : none();
+    case 5: case 6: op.parity = n === 5 ? "even" : "odd"; addLog(s, { k: "parity", target: 1 - who, par: op.parity }); return afterMain(s);
+    case 7: case 8: case 9: return pend();
+    case 10: return hiddenField(me).length ? pend() : none();
+  }
+}
+
+function resolveEffect(s, who, a) {
+  if (s.step !== "effect" || !s.pending) fail("効果の選択中ではありません");
+  const me = P(s, who), op = P(s, 1 - who), eff = s.pending.eff;
+  if (a.skip) { addLog(s, { k: eff === 8 && s.pending.left < 3 ? "stop8" : "skip", who }); return afterMain(s); }
+  switch (eff) {
+    case 1: {
+      const n = hiddenField(op)[a.idx];
+      if (n == null) fail("そのカードは選べません");
+      reveal(s, 1 - who, n, "e1"); return afterMain(s);
+    }
+    case 4: {
+      if (C(me, a.h)?.z !== "h" || !hiddenField(me).includes(a.f)) fail("手札1枚と場の裏向きカード1枚を選んでください");
+      const ch = C(me, a.h), cf = C(me, a.f);
+      ch.z = "f"; ch.o = cf.o; cf.z = "h"; cf.o = 0;
+      addLog(s, { k: "swap4", who, h: a.h, f: a.f }); return afterMain(s);
+    }
+    case 7: {
+      const n = a.n; if (!NUMS.includes(n)) fail("数字を選んでください");
+      const z = C(op, n).r ? "r" : C(op, n).z;
+      op.facts.push({ t: "loc", n, z, at: s.turnNo });
+      addLog(s, { k: "loc", who, n, z }); return afterMain(s);
+    }
+    case 8: {
+      const n = a.n; if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
+      if (hiddenField(op).includes(n)) {
+        reveal(s, 1 - who, n, "e8");
+        if (s.phase === "over") return;
+        s.pending.left--;
+        if (s.pending.left <= 0 || !hiddenField(op).length) return afterMain(s);
+        return;
+      }
+      addLog(s, { k: "e8miss", who, n });
+      penalty(s, who); return afterMain(s);
+    }
+    case 9: {
+      const mine = hiddenField(me), theirs = hiddenField(op);
+      for (const n of theirs) op.facts.push({ t: "loc", n, z: "f", at: s.turnNo });
+      for (const n of mine) me.facts.push({ t: "loc", n, z: "f", at: s.turnNo });
+      addLog(s, { k: "show9", who, mine, theirs }); return afterMain(s);
+    }
+    case 10: {
+      if (!hiddenField(me).includes(a.f)) fail("場の裏向きカードを選んでください");
+      C(me, a.f).z = "h"; C(me, a.f).o = 0;
+      addLog(s, { k: "take10", who, n: a.f }); return afterMain(s);
+    }
+  }
+}
+
+function act(s0, who, a) {
+  const s = clone(s0);
+  if (s.phase === "setup" && bothReady(s)) s.phase = "play";
+  if (s.phase !== "play") fail("ゲームは進行中ではありません");
+  if (s.turn !== who) fail("相手の番です");
+  const me = P(s, who), op = P(s, 1 - who);
+  switch (a.type) {
+    case "trump": {
+      if (s.step !== "action") fail("切り札は自分の番の最初に使えます");
+      if (me.trumpUsed) fail("切り札はもう使いました");
+      if (!me.mines.includes(a.a) || me.found.includes(a.a)) fail("判明していない地雷を選んでください");
+      if (!hiddenField(me).includes(a.b) || isMine(me, a.b)) fail("地雷ではない場の裏向きカードを選んでください");
+      me.swapUnrev = NUMS.filter(n => !C(me, n).r && !me.found.includes(n));
+      me.mines = me.mines.map(x => x === a.a ? a.b : x);
+      me.trumpUsed = true;
+      addLog(s, { k: "trump", who, a: a.a, b: a.b });
+      break;
+    }
+    case "guess": {
+      if (s.step !== "action") fail("推理は自分の番の最初に行います");
+      const n = a.n;
+      if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
+      if (isMine(op, n)) { addLog(s, { k: "guessHit", who, n }); reveal(s, 1 - who, n, "guess"); }
+      else { op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n }); penalty(s, who); }
+      afterMain(s);
+      break;
+    }
+    case "spin": {
+      if (s.step !== "action") fail("ルーレットは自分の番の最初に回します");
+      const n = a.n || 1 + Math.floor(Math.random() * 10);
+      s.spin = { who, n, id: Date.now() + "-" + Math.floor(Math.random() * 1e6) };
+      addLog(s, { k: "spin", who, n });
+      startEffect(s, who, n);
+      break;
+    }
+    case "eff": resolveEffect(s, who, a); break;
+    case "place": {
+      if (s.step !== "place") fail("いまはカードを出す場面ではありません");
+      const n = a.n;
+      if (C(me, n)?.z !== "h") fail("手札のカードを選んでください");
+      if (me.parity) {
+        const ok = handOf(me).filter(x => parityOk(x, me.parity));
+        if (ok.length && !parityOk(n, me.parity)) fail(me.parity === "even" ? "偶数のカードを出してください" : "奇数のカードを出してください");
+      }
+      C(me, n).z = "f"; C(me, n).o = ++me.seq;
+      addLog(s, { k: "place", who, n, forced: me.parity });
+      me.parity = null;
+      endTurn(s);
+      break;
+    }
+    default: fail("不明な操作です");
+  }
+  return s;
+}
+
+// ---------- 推理アシスト：可能な地雷の組み合わせを全列挙 ----------
+function okAt(pair, facts, e) {
+  for (const f of facts) {
+    if (f.e !== e) continue;
+    if (f.t === "not" && pair.includes(f.n)) return false;
+    if (f.t === "mine" && !pair.includes(f.n)) return false;
+    if (f.t === "sum" && pair[0] + pair[1] !== f.s) return false;
+  }
+  return true;
+}
+// p: 推理される側のプレイヤー。公開情報（facts / 切り札使用 / 切り札時点の未公開カード）だけを使う
+function solve(p) {
+  const W = new Map();
+  const add = (pair, w) => { const k = pair[0] + "-" + pair[1]; W.set(k, (W.get(k) || 0) + w); };
+  const facts = p.facts;
+  if (!p.trumpUsed) {
+    for (const pr of PAIRS) if (okAt(pr, facts, 0)) add(pr, 1);
+  } else {
+    // 切り札前の組み合わせ × (どちらの地雷を, どのカードへ移したか) を全部たどって、切り札後の条件で絞る
+    const found0 = facts.filter(f => f.e === 0 && f.t === "mine").map(f => f.n);
+    for (const p0 of PAIRS) {
+      if (!okAt(p0, facts, 0)) continue;
+      const as = p0.filter(x => !found0.includes(x));
+      const bs = (p.swapUnrev || []).filter(x => !p0.includes(x));
+      if (!as.length || !bs.length) continue;
+      const w = 1 / (as.length * bs.length);
+      for (const a of as) for (const b of bs) {
+        const p1 = p0.map(x => x === a ? b : x).sort((x, y) => x - y);
+        if (okAt(p1, facts, 1)) add(p1, w);
+      }
+    }
+  }
+  let total = 0; for (const w of W.values()) total += w;
+  const list = [...W.entries()].map(([k, w]) => ({ pair: k.split("-").map(Number), w, pr: total ? w / total : 0 })).sort((a, b) => b.w - a.w || a.pair[0] - b.pair[0]);
+  const prob = {}; for (const n of NUMS) prob[n] = 0;
+  for (const c of list) { prob[c.pair[0]] += c.pr; prob[c.pair[1]] += c.pr; }
+  return { count: list.length, total, list, prob, map: W };
+}
+const lastLoc = (p, n) => { for (let i = p.facts.length - 1; i >= 0; i--) { const f = p.facts[i]; if (f.t === "loc" && f.n === n) return f.z; } return null; };
+
+// ---------- CPU ----------
+function cpuDecide(s) {
+  const me = s.p1, op = s.p0;
+  if (s.step === "action") {
+    if (!me.trumpUsed) {
+      const unf = me.mines.filter(m => !me.found.includes(m));
+      const spots = hiddenField(me).filter(n => !isMine(me, n));
+      if (unf.length && spots.length) {
+        const r = solve(me);
+        const key = [...me.mines].sort((a, b) => a - b).join("-");
+        const exposed = r.total ? (r.map.get(key) || 0) / r.total : 0;
+        const hot = Math.max(...unf.map(m => r.prob[m]));
+        if (exposed >= 0.2 || (me.found.length === 1 && hot >= 0.4)) {
+          const a = [...unf].sort((x, y) => r.prob[y] - r.prob[x])[0];
+          const b = [...spots].sort((x, y) => r.prob[x] - r.prob[y])[0];
+          return { type: "trump", a, b };
+        }
+      }
+    }
+    const r = solve(op);
+    const cand = NUMS.filter(n => !C(op, n).r).sort((a, b) => r.prob[b] - r.prob[a]);
+    const best = cand[0], pb = r.prob[best];
+    if (pb >= 0.5 || r.count <= 2 || (pb >= 0.34 && Math.random() < 0.5)) return { type: "guess", n: best };
+    return { type: "spin" };
+  }
+  if (s.step === "effect") {
+    const e = s.pending.eff, r = solve(op);
+    switch (e) {
+      case 1: return { type: "eff", idx: Math.floor(Math.random() * hiddenField(op).length) };
+      case 4: {
+        const mf = hiddenField(me).filter(n => isMine(me, n)), hs = handOf(me).filter(n => !isMine(me, n));
+        return mf.length && hs.length ? { type: "eff", h: rnd(hs), f: mf[0] } : { type: "eff", skip: true };
+      }
+      case 7: {
+        const c = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) == null).sort((a, b) => r.prob[b] - r.prob[a]);
+        return { type: "eff", n: c[0] || NUMS.find(n => !C(op, n).r) || 1 };
+      }
+      case 8: {
+        const hidden = hiddenField(op).length;
+        const known = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) === "f").sort((a, b) => r.prob[b] - r.prob[a]);
+        const rest = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) !== "f" && lastLoc(op, n) !== "h").sort((a, b) => r.prob[b] - r.prob[a]);
+        if (known.length) return { type: "eff", n: known[0] };
+        const chance = rest.length ? hidden / rest.length : 0;
+        if (rest.length && (s.pending.left === 3 || chance >= 0.5)) return { type: "eff", n: rest[0] };
+        return { type: "eff", skip: true };
+      }
+      case 9: return { type: "eff", use: !hiddenField(me).some(n => isMine(me, n)) };
+      case 10: {
+        const mf = hiddenField(me).filter(n => isMine(me, n));
+        return mf.length ? { type: "eff", f: mf[0] } : { type: "eff", skip: true };
+      }
+    }
+  }
+  if (s.step === "place") {
+    let h = handOf(me);
+    if (me.parity) { const ok = h.filter(n => parityOk(n, me.parity)); if (ok.length) h = ok; }
+    const safe = h.filter(n => !isMine(me, n));
+    return { type: "place", n: rnd(safe.length ? safe : h) };
+  }
+}
+
+// ---------- 画面状態 ----------
+let S = null;               // ゲーム状態
+let screen = "start";       // start | game
+let ui = {};                // 自分の操作中の選択（setupSel, mode, trumpA, eff4h）
+let me = 0;                 // 自分の席番号（オンラインでは -1 = 観戦）
+let cpuTimer = null;
+let spinBusyUntil = 0, lastSpinId = null, wheelRot = 0;
+const online = { db: null, dbReady: false, ref: null, unsub: null, code: null, uid: null, writing: Promise.resolve(), readOnly: false };
+
+const $ = sel => document.querySelector(sel);
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = x => (x * 100 >= 99.95 ? "100" : x * 100 < 0.05 ? "0" : (x * 100).toFixed(x * 100 < 10 ? 1 : 0)) + "%";
+let toastTimer;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 2600); }
+function store(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function load(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+
+const oppName = () => S && S.mode === "cpu" ? "CPU" : "相手";
+const nm = (w, v) => v === -1 ? (w === 0 ? "P1" : "P2") : w === v ? "あなた" : oppName();
+const effPhase = s => s.phase === "setup" && bothReady(s) ? "play" : s.phase;
+
+// ---------- ログ表示（見る人ごとに秘密を隠す） ----------
+function fmt(e, v) {
+  const W = nm(e.who, v);
+  const causeTxt = { penalty: "ペナルティで", e1: "効果1で", e3: "効果3で", e8: "効果8で" };
+  const par = x => x === "even" ? "偶数" : "奇数";
+  switch (e.k) {
+    case "guessHit": return [`${W}の推理「${e.n}」→ 的中！`, "hit"];
+    case "guessMiss": return [`${W}の推理「${e.n}」→ ハズレ`];
+    case "reveal": if (e.cause === "guess") return null;
+      return [`${nm(e.owner, v)}の ${e.n} が${causeTxt[e.cause] || ""}公開${e.mine ? "（地雷！）" : ""}`, e.mine ? "hit" : ""];
+    case "nopen": return [`${W}は公開できるカードがない`];
+    case "spin": return [`${W}のルーレット → ${e.n}「${SHORT[e.n]}」`];
+    case "sum": return [e.who === v ? `${oppName()}の地雷の合計は ${e.s}` : v === 1 - e.who ? `あなたの地雷の合計（${e.s}）を知られた` : `${W}が合計ヒントを得た`];
+    case "parity": return [`${nm(e.target, v)}は次に${par(e.par)}を出す`];
+    case "none": return [`${W}: 対象のカードがなく効果なし`];
+    case "skip": return [`${W}は効果を使わなかった`];
+    case "stop8": return [`${W}は指名をやめた`];
+    case "swap4": return [e.who === v ? `手札の ${e.h} と場の ${e.f} を入れ替えた` : `${W}が手札と場のカードを入れ替えた`];
+    case "loc": return [`${W}の質問「${e.n} はどこ？」→ ${e.z === "h" ? "手札" : e.z === "f" ? "場（裏向き）" : "公開済み"}`];
+    case "e8miss": return [`${W}の指名「${e.n}」→ 場になし`];
+    case "show9": {
+      if (v === -1) return [`${W}が見せ合いを使った`];
+      const theirs = e.who === v ? e.theirs : e.mine, mine = e.who === v ? e.mine : e.theirs;
+      return [`見せ合い：${oppName()}の場 [${theirs.join(", ") || "なし"}]／あなたの場 [${mine.join(", ") || "なし"}]`];
+    }
+    case "take10": return [e.who === v ? `場の ${e.n} を手札に戻した` : `${W}が場のカードを1枚手札に戻した`];
+    case "trump": return [e.who === v ? `切り札：地雷を ${e.a} から ${e.b} に移した` : `${W}が切り札を使った（中身は秘密）`, "hit"];
+    case "place": return [(e.who === v ? `${e.n} を場に出した` : `${W}がカードを1枚場に出した`) + (e.forced ? `（${par(e.forced)}指定）` : "")];
+    case "nohand": return [`${W}の手札がなくなった`];
+    case "win": return [e.who === v ? "あなたの勝ち！" : `${W}の勝ち`, "hit"];
+  }
+  return null;
+}
+
+// ---------- ルーレット ----------
+function buildWheel() {
+  const pt = (deg, r) => { const t = deg * Math.PI / 180; return [(r * Math.sin(t)).toFixed(2), (-r * Math.cos(t)).toFixed(2)]; };
+  let g = "";
+  for (let k = 0; k < 10; k++) {
+    const a0 = k * 36, a1 = a0 + 36, [x0, y0] = pt(a0, 96), [x1, y1] = pt(a1, 96), [tx, ty] = pt(a0 + 18, 72);
+    g += `<path class="${k % 2 ? "seg-b" : "seg-a"}" d="M0 0 L${x0} ${y0} A96 96 0 0 1 ${x1} ${y1} Z"/>`;
+    g += `<path class="seg-line" d="M0 0 L${x0} ${y0}"/>`;
+    g += `<text class="seg-num" x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="central" transform="rotate(${a0 + 18} ${tx} ${ty})">${k + 1}</text>`;
+  }
+  return `<div class="wheel" aria-hidden="true"><svg class="disc" id="disc" viewBox="-100 -100 200 200">${g}<circle class="rim" r="97"/><circle class="hub" r="20"/><circle class="hub-in" r="12"/></svg><div class="pointer"></div></div>`;
+}
+function syncWheel(animate) {
+  const disc = $("#disc"); if (!disc || !S || !S.spin) return;
+  if (S.spin.id !== lastSpinId) {
+    const target = (360 - ((S.spin.n - 1) * 36 + 18)) % 360;
+    const cur = ((wheelRot % 360) + 360) % 360;
+    wheelRot += (animate ? 360 * 4 : 0) + ((target - cur + 360) % 360);
+    if (animate) spinBusyUntil = Date.now() + 1750;
+    lastSpinId = S.spin.id;
+  }
+  if (disc.dataset.rot === String(wheelRot)) return;
+  disc.dataset.rot = String(wheelRot);
+  if (animate) { disc.style.transform = `rotate(${wheelRot}deg)`; return; }
+  disc.style.transition = "none";
+  disc.style.transform = `rotate(${wheelRot}deg)`;
+  void disc.getBoundingClientRect();
+  disc.style.transition = "";
+}
+
+// ---------- 描画 ----------
+function render() {
+  renderTop();
+  if (screen === "start") return renderStart();
+  renderGame();
+}
+function renderTop() {
+  const a = [];
+  a.push(`<button class="btn quiet sm" data-act="rules">ルール</button>`);
+  if (screen === "game") a.push(`<button class="btn quiet sm" data-act="home">${S && S.mode === "online" ? "部屋を出る" : "トップへ"}</button>`);
+  $("#topActions").innerHTML = a.join("");
+}
+
+function renderStart() {
+  const saved = load("lc_game");
+  const dbTxt = !online.dbReady ? "接続を確認しています…" : online.db ? "" : "オンライン対戦は claude.ai でこのページを開いたときに使えます。";
+  const lastCode = load("lc_room");
+  $("#main").innerHTML = `
+  <section class="start">
+    <div class="hero">
+      <div class="fan">${[3, 7, 1, 10, 5].map((n, i) => `<div class="card" style="--i:${i}">${n}</div>`).join("")}</div>
+      <h2>地雷を隠し、地雷を暴け。</h2>
+      <p>1〜10のカードに2枚の「地雷」を仕込み、ルーレットの効果と推理で相手の地雷を先に2枚とも当てたほうが勝ち。右側の推理アシストが、相手の地雷としてあり得る組み合わせをすべて数え上げて確率を出します。</p>
+    </div>
+    <div class="modes">
+      <div class="mode">
+        <h3>CPUと対戦</h3>
+        <p>1人で遊ぶモード。CPUも同じ推理アシストを使って、あなたの地雷を絞り込んできます。</p>
+        <div class="btns"><button class="btn" data-act="mode-cpu">新しく始める</button>${saved && saved.phase !== "over" ? `<button class="btn ghost" data-act="resume-cpu">続きから</button>` : ""}</div>
+      </div>
+      <div class="mode">
+        <h3>オンライン対戦</h3>
+        <p>部屋を作って4文字の部屋コードを相手に伝えます。相手は同じページを開いてコードを入力します。</p>
+        ${dbTxt ? `<p class="note">${esc(dbTxt)}</p>` : ""}
+        <div class="btns"><button class="btn" data-act="online-create" ${online.db ? "" : "disabled"}>部屋を作る</button></div>
+        <div class="join"><input id="joinCode" maxlength="4" placeholder="コード" autocomplete="off" value="${esc(lastCode || "")}" aria-label="部屋コード"><button class="btn ghost" data-act="online-join" ${online.db ? "" : "disabled"}>参加する</button></div>
+      </div>
+    </div>
+  </section>`;
+}
+
+function cardHTML(n, cls, act, extra = "", tag = "") {
+  const t = tag ? `<span class="tag">${tag}</span>` : "";
+  if (act) return `<button class="card ${cls}" data-act="${act}" ${extra}>${t}${n}</button>`;
+  return `<div class="card ${cls}" ${extra}>${t}${n}</div>`;
+}
+
+function renderGame() {
+  const s = S, phase = effPhase(s);
+  const v = me, o = me === -1 ? 1 : 1 - me, mySeat = me === -1 ? 0 : me;
+  const op = P(s, o), mp = P(s, mySeat);
+  const busy = Date.now() < spinBusyUntil;
+  const myTurn = phase === "play" && s.turn === me && !busy;
+  const over = phase === "over";
+
+  // --- 相手席 ---
+  const oppField = fieldOf(op), oppHidden = hiddenField(op);
+  const pickOpp = myTurn && s.step === "effect" && s.pending?.eff === 1;
+  const oppFieldHTML = oppField.length ? oppField.map(n => {
+    const c = C(op, n);
+    if (c.r || over) return cardHTML(n, op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), "", "", c.r ? "" : "裏");
+    const idx = oppHidden.indexOf(n);
+    return pickOpp ? `<button class="card back pickable" data-act="opp-field" data-idx="${idx}" aria-label="裏向きのカード ${idx + 1}"></button>` : `<div class="card back"></div>`;
+  }).join("") : `<span class="empty">まだカードはありません</span>`;
+  const oppHand = handOf(op);
+  const oppHandHTML = oppHand.length ? oppHand.map(n => C(op, n).r || over ? cardHTML(n, op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), "", "", C(op, n).r ? "" : "手") : `<div class="card back"></div>`).join("") : `<span class="empty">手札なし</span>`;
+
+  const seatChips = (p, mine) => [
+    `<span class="chip">手札 ${handOf(p).length}</span>`,
+    `<span class="chip ${p.found.length ? "bad" : ""}">判明した地雷 ${p.found.length}/2</span>`,
+    `<span class="chip ${p.trumpUsed ? "" : "on"}">切り札 ${p.trumpUsed ? "使用済み" : "あり"}</span>`,
+    p.parity ? `<span class="chip on">次は${p.parity === "even" ? "偶数" : "奇数"}</span>` : "",
+  ].join("");
+
+  // --- 自分席 ---
+  const setupMode = phase === "setup" && me !== -1 && !mp.ready;
+  const clickable = n => {
+    const c = C(mp, n);
+    if (setupMode) return true;
+    if (!myTurn) return false;
+    if (ui.mode === "trumpA") return isMine(mp, n) && !mp.found.includes(n);
+    if (ui.mode === "trumpB") return c.z === "f" && !c.r && !isMine(mp, n);
+    if (s.step === "effect" && s.pending?.eff === 4) return ui.eff4h == null ? c.z === "h" : (c.z === "f" && !c.r);
+    if (s.step === "effect" && s.pending?.eff === 10) return c.z === "f" && !c.r;
+    if (s.step === "place") {
+      if (c.z !== "h") return false;
+      if (mp.parity) { const ok = handOf(mp).filter(x => parityOk(x, mp.parity)); if (ok.length) return parityOk(n, mp.parity); }
+      return true;
+    }
+    return false;
+  };
+  const myCard = (n, zone) => {
+    const c = C(mp, n);
+    const sel = (setupMode && (ui.setupSel || []).includes(n)) || ui.trumpA === n || ui.eff4h === n;
+    let cls = [];
+    if (mp.found.includes(n)) cls.push("found"); else if (isMine(mp, n) && !setupMode) cls.push("mine");
+    if (zone === "f" && !c.r) cls.push("veiled");
+    if (sel) cls.push("sel");
+    const can = clickable(n);
+    if (can && !setupMode) cls.push("pickable");
+    const anyPick = setupMode || (myTurn && (ui.mode || s.step === "place" || (s.step === "effect" && [4, 10].includes(s.pending?.eff))));
+    if (anyPick && !can && !sel) cls.push("dim");
+    const tag = zone === "f" ? (c.r ? "公開" : "裏") : (c.r ? "公開" : "");
+    return cardHTML(n, cls.join(" "), can ? "my-card" : "", `data-n="${n}"`, tag);
+  };
+  const myField = fieldOf(mp), myHand = handOf(mp);
+
+  // --- 操作パネル ---
+  const panel = renderPanel(s, phase, busy, myTurn, over, op, mp);
+
+  // --- 推理アシスト ---
+  const assist = renderAssist(s, phase, op, mp, over);
+
+  // --- ログ ---
+  const logHTML = s.log.slice().reverse().map(e => {
+    const r = fmt(e, v); if (!r) return "";
+    const who = e.who ?? e.owner ?? e.target;
+    return `<div><span class="t">T${e.t}</span><span class="${r[1] === "hit" ? "hit" : who === v ? "me" : "op"}">${esc(r[0])}</span></div>`;
+  }).join("") || `<p class="note">ここに対戦の記録が残ります。</p>`;
+
+  if (!document.getElementById("board")) {
+    $("#main").innerHTML = `
+  <div class="board" id="board">
+    <section class="felt" aria-label="テーブル">
+      <div class="seat" id="oppSeat"></div>
+      <div class="center">${buildWheel()}<div id="panel"></div></div>
+      <div class="seat" id="mySeat"></div>
+    </section>
+    <aside class="side">
+      <div id="assist"></div>
+      <section class="box"><h2>記録</h2><div class="log" id="log"></div></section>
+    </aside>
+  </div>`;
+  }
+  const opp = $("#oppSeat"), mine = $("#mySeat");
+  opp.className = "seat" + (phase === "play" && s.turn === o ? " turn" : "");
+  mine.className = "seat" + (phase === "play" && s.turn === mySeat ? " turn" : "");
+  opp.innerHTML = `
+        <div class="seat-head"><span class="seat-name">${me === -1 ? "P2" : esc(oppName())}</span>${seatChips(op)}</div>
+        <div class="zone"><span class="zone-label">場</span><div class="cards">${oppFieldHTML}</div></div>
+        <div class="zone"><span class="zone-label">手札</span><div class="cards">${oppHandHTML}</div></div>`;
+  mine.innerHTML = `
+        <div class="seat-head"><span class="seat-name">${me === -1 ? "P1" : "あなた"}</span>${setupMode ? "" : seatChips(mp)}</div>
+        <div class="zone"><span class="zone-label">場</span><div class="cards">${myField.length ? myField.map(n => myCard(n, "f")).join("") : `<span class="empty">まだカードはありません</span>`}</div></div>
+        <div class="zone"><span class="zone-label">手札</span><div class="cards">${myHand.length ? myHand.map(n => myCard(n, "h")).join("") : `<span class="empty">手札なし</span>`}</div></div>`;
+  $("#panel").outerHTML = panel.replace('<div class="panel">', '<div class="panel" id="panel">');
+  $("#assist").innerHTML = assist;
+  $("#log").innerHTML = logHTML;
+  syncWheel(false);
+  if (busy) setTimeout(render, spinBusyUntil - Date.now() + 30);
+}
+
+function numpad(kind, op, r) {
+  return `<div class="numpad">${NUMS.map(n => {
+    const dis = C(op, n).r;
+    return `<button data-act="pad" data-kind="${kind}" data-n="${n}" ${dis ? "disabled" : ""} aria-label="${n}"><b>${n}</b><span>${dis ? "公開" : pct(r.prob[n])}</span></button>`;
+  }).join("")}</div>`;
+}
+
+function renderPanel(s, phase, busy, myTurn, over, op, mp) {
+  const wrap = inner => `<div class="panel">${inner}</div>`;
+  const waitJoin = s.mode === "online" && phase === "setup" && !s.p1.uid
+    ? `<div class="prompt">部屋コード<small>相手にこのコードを伝えてください。相手はこのページを開き「参加する」に入力します。</small></div><div class="btns" style="align-items:center"><span class="code">${esc(online.code || "")}</span><button class="btn ghost sm" data-act="copy-code">コピー</button></div>` : "";
+  if (phase === "setup") {
+    if (me === -1) return wrap(`<div class="prompt">観戦中<small>この部屋は満席です。</small></div>`);
+    if (!mp.ready) {
+      const sel = ui.setupSel || [];
+      return wrap(`${waitJoin}<div class="prompt">地雷にするカードを<b>2枚</b>選んでください<small>あなたの手札から選びます。相手に2枚とも当てられたら負けです。（選択中: ${sel.length ? sel.join(" と ") : "なし"}）</small></div><div class="btns"><button class="btn" data-act="setup-ok" ${sel.length === 2 ? "" : "disabled"}>この2枚で決定</button><button class="btn quiet" data-act="setup-random">おまかせ</button></div>`);
+    }
+    return wrap(waitJoin || `<div class="prompt">相手が地雷を選ぶのを待っています…<small>部屋コード ${esc(online.code || "")}</small></div>`);
+  }
+  if (over) {
+    const win = s.winner === me;
+    return wrap(`<div class="result ${win ? "" : "lose"}">${me === -1 ? `${s.winner === 0 ? "P1" : "P2"}の勝ち` : win ? "YOU WIN" : "YOU LOSE"}</div><div class="prompt"><small>${oppName()}の地雷は ${op.mines.join(" と ")}、あなたの地雷は ${mp.mines.join(" と ")} でした。</small></div><div class="btns">${me !== -1 ? `<button class="btn" data-act="again">もう一度</button>` : ""}</div>`);
+  }
+  if (busy) return wrap(`<div class="prompt">ルーレット回転中…</div>`);
+  if (s.turn !== me) {
+    let t = s.mode === "cpu" ? "CPUが考えています…" : "相手の番です…";
+    if (s.step === "effect" && s.spin && s.spin.who !== me) t = `${oppName()}が効果 ${s.pending.eff}「${SHORT[s.pending.eff]}」を使っています…`;
+    return wrap(`<div class="prompt">${t}<small>${me === -1 ? "観戦中" : "相手の行動は右の記録に表示されます。"}</small></div>`);
+  }
+  const r = solve(op);
+  if (s.step === "action") {
+    if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、場の裏向きカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>場の裏向きカード</b>を選んでください<small>相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    const canTrump = !mp.trumpUsed && mp.mines.some(m => !mp.found.includes(m)) && hiddenField(mp).some(n => !isMine(mp, n));
+    return wrap(`<div class="prompt">あなたの番です<small>推理かルーレットのどちらかを行い、そのあと手札から1枚を場に出します。</small></div>
+      <div class="btns"><button class="btn" data-act="guess-open">推理する</button><button class="btn ghost" data-act="spin">ルーレットを回す</button>${!mp.trumpUsed ? `<button class="btn quiet" data-act="trump-open" ${canTrump ? "" : "disabled"} title="${canTrump ? "" : "地雷ではない裏向きのカードが場にあると使えます"}">切り札（1回）</button>` : ""}</div>`);
+  }
+  if (s.step === "effect") {
+    const e = s.pending.eff;
+    const head = `<div class="effect-card"><div class="big">${e}</div><div class="prompt">${esc(EFFECTS[e])}</div></div>`;
+    const skip = label => `<button class="btn quiet sm" data-act="eff-skip">${label}</button>`;
+    switch (e) {
+      case 1: return wrap(`${head}<div class="prompt"><small>相手の場の裏向きカード（緑の枠）をクリックしてください。</small></div><div class="btns">${skip("使わない")}</div>`);
+      case 4: return wrap(`${head}<div class="prompt"><small>${ui.eff4h == null ? "まず手札から1枚選んでください。" : `手札の ${ui.eff4h} と入れ替える場の裏向きカードを選んでください。`}</small></div><div class="btns">${ui.eff4h != null ? `<button class="btn quiet sm" data-act="eff4-reset">選び直す</button>` : ""}${skip("使わない")}</div>`);
+      case 7: return wrap(`${head}${numpad("e7", op, r)}<div class="btns">${skip("使わない")}</div>`);
+      case 8: return wrap(`${head}<div class="prompt"><small>残り <b>${s.pending.left}</b> 回。相手の場に裏向きであれば表になります。</small></div>${numpad("e8", op, r)}<div class="btns">${skip(s.pending.left < 3 ? "ここでやめる" : "使わない")}</div>`);
+      case 9: { const mh = hiddenField(mp);
+        return wrap(`${head}<div class="prompt"><small>見せ合うと、あなたの場の裏向きカード [${mh.join(", ") || "なし"}] も相手に見えます。</small></div><div class="btns"><button class="btn" data-act="eff9-use">見せ合う</button>${skip("使わない")}</div>`); }
+      case 10: return wrap(`${head}<div class="prompt"><small>手札に戻す場の裏向きカードを選んでください。</small></div><div class="btns">${skip("使わない")}</div>`);
+    }
+  }
+  if (s.step === "place") {
+    const ok = mp.parity ? handOf(mp).filter(x => parityOk(x, mp.parity)) : [];
+    const note = mp.parity ? (ok.length ? `${mp.parity === "even" ? "偶数" : "奇数"}指定を受けています。` : `${mp.parity === "even" ? "偶数" : "奇数"}指定ですが該当カードがないので自由に出せます。`) : "地雷を場に出すと、効果でめくられる危険があります。";
+    return wrap(`<div class="prompt">手札から場に出すカードを1枚選んでください<small>${note}</small></div>`);
+  }
+  return wrap("");
+}
+
+function renderAssist(s, phase, op, mp, over) {
+  if (phase === "setup") return `<section class="box"><h2>推理アシスト</h2><p class="note">ゲームが始まると、${oppName()}の地雷としてあり得る組み合わせ（最初は 45 通り）を、公開された情報から毎ターン数え直して表示します。</p></section>`;
+  const r = solve(op);
+  const top = r.list.slice(0, 12);
+  const rows = NUMS.map(n => {
+    const c = C(op, n), p = r.prob[n];
+    const tags = [];
+    if (op.found.includes(n)) tags.push("地雷（判明）");
+    else if (c.r) tags.push("公開・地雷ではない");
+    else {
+      if (op.facts.some(f => f.t === "not" && f.n === n)) tags.push("推理ハズレ");
+      const l = lastLoc(op, n); if (l === "h") tags.push("手札にある"); else if (l === "f") tags.push("場にある");
+    }
+    const cls = op.found.includes(n) ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "";
+    return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tags.join("・"))}</em></span><span class="pct">${pct(p)}</span></div>`;
+  }).join("");
+  const sums = op.facts.filter(f => f.t === "sum").map(f => f.s + (op.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
+  // 自分の地雷がどれだけ読まれているか
+  let exposure = "";
+  if (me !== -1) {
+    const mr = solve(mp), key = [...mp.mines].sort((a, b) => a - b).join("-");
+    const ex = mr.total ? (mr.map.get(key) || 0) / mr.total : 0;
+    exposure = `<div class="note">${oppName()}から見たあなたの地雷：候補 ${mr.count} 通り、正解を引かれる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>`;
+  }
+  return `<section class="box">
+    <h2>推理アシスト <small>候補 ${r.count} / 45 通り</small></h2>
+    <div class="prob">${rows}</div>
+    <div class="combos">${top.map((c, i) => `<span class="combo ${i === 0 && r.count > 1 ? "top" : ""}"><b>${c.pair[0]}・${c.pair[1]}</b> ${pct(c.pr)}</span>`).join("")}${r.count > top.length ? `<span class="combo">ほか ${r.count - top.length} 通り</span>` : ""}</div>
+    <p class="note">公開カード・推理のハズレ・判明した地雷${sums.length ? `・合計ヒント（${sums.join(", ")}）` : ""}と矛盾しない組み合わせを全列挙しています。${op.trumpUsed ? `<br>${oppName()}は切り札を使用済み：入れ替え前の候補 × 移し先の全パターンを合成して計算しています。` : ""}</p>
+    ${exposure}
+  </section>`;
+}
+
+// ---------- 進行 ----------
+function commit(ns) {
+  S = ns;
+  ui = {};
+  if (S.mode === "cpu") { store("lc_game", S); }
+  syncWheel(true);
+  render();
+  if (S.mode === "online") pushOnline();
+  scheduleCpu();
+}
+function doAct(a) {
+  try { commit(act(S, me, a)); }
+  catch (e) { if (e.user) toast(e.message); else { console.error(e); toast("エラーが発生しました"); } }
+}
+function scheduleCpu() {
+  clearTimeout(cpuTimer);
+  if (!S || S.mode !== "cpu" || effPhase(S) !== "play" || S.turn !== 1) return;
+  const wait = Math.max(0, spinBusyUntil - Date.now()) + 900;
+  cpuTimer = setTimeout(() => {
+    if (!S || S.mode !== "cpu" || S.turn !== 1 || effPhase(S) !== "play") return;
+    try { commit(act(S, 1, cpuDecide(S))); }
+    catch (e) { console.error(e); const fallback = S.step === "effect" ? { type: "eff", skip: true } : S.step === "place" ? { type: "place", n: handOf(S.p1)[0] } : { type: "spin" }; commit(act(S, 1, fallback)); }
+  }, wait);
+}
+function startCpu() {
+  leaveOnline();
+  S = newGame("cpu", "you", "cpu"); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null;
+  store("lc_game", S); render();
+}
+function confirmSetup(sel) {
+  if (S.mode === "cpu") {
+    const s = clone(S);
+    s.p0.mines = sel; s.p0.ready = true;
+    const two = [...NUMS].sort(() => Math.random() - .5).slice(0, 2).sort((a, b) => a - b);
+    s.p1.mines = two; s.p1.ready = true; s.phase = "play";
+    commit(s);
+  } else {
+    const key = "p" + me;
+    S = clone(S); S[key].mines = sel; S[key].ready = true; ui = {};
+    if (bothReady(S)) S.phase = "play";
+    render();
+    write(() => online.ref.update({ [key]: { mines: sel, ready: true } }));
+  }
+}
+
+// ---------- オンライン ----------
+function write(fn) {
+  online.writing = online.writing.then(fn).catch(e => {
+    console.error(e);
+    if (e && e.code === "invalid_argument") { online.readOnly = true; toast("書き込みできませんでした。部屋の持ち主に、このページの編集権限で招待してもらってください。"); }
+    else toast("通信に失敗しました。もう一度試してください。");
+  });
+  return online.writing;
+}
+function pushOnline() { if (online.ref && me !== -1) { const snap = clone(S); write(() => online.ref.set(snap)); } }
+function seatOf(s) { return s.p0.uid === online.uid ? 0 : s.p1.uid === online.uid ? 1 : -1; }
+function subscribe(code) {
+  if (online.unsub) online.unsub();
+  online.code = code; online.ref = online.db.doc("games/" + code);
+  store("lc_room", code);
+  let first = true;
+  online.unsub = online.ref.onSnapshot(snap => {
+    if (!snap.exists) return;
+    const data = clone(snap.data());
+    if (data.phase === "setup" && bothReady(data)) data.phase = "play";
+    const prevMe = me; S = data; me = seatOf(S);
+    if (prevMe !== me) ui = {};
+    if (S.phase === "setup" && me !== -1 && !P(S, me).ready && !ui.setupSel) ui.setupSel = [];
+    syncWheel(!first);
+    first = false;
+    screen = "game"; render();
+  }, err => { console.error(err); toast("部屋との接続が切れました。ページを開き直してください。"); });
+}
+function genCode() { const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let c = ""; for (let i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)]; return c; }
+async function createRoom() {
+  if (!online.db) return;
+  const code = genCode();
+  const s = newGame("online", online.uid, null);
+  S = s; me = 0; ui = { setupSel: [] }; screen = "game"; online.code = code; lastSpinId = null;
+  render();
+  online.ref = online.db.doc("games/" + code);
+  await write(() => online.ref.set(s));
+  subscribe(code);
+}
+async function joinRoom(code) {
+  code = (code || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(code)) return toast("4文字の部屋コードを入力してください");
+  const ref = online.db.doc("games/" + code);
+  let snap;
+  try { snap = await ref.get(); } catch (e) { return toast("部屋を読み込めませんでした"); }
+  if (!snap.exists) return toast(`部屋 ${code} は見つかりませんでした`);
+  const d = snap.data();
+  online.ref = ref; online.code = code; lastSpinId = null;
+  if (d.p0.uid !== online.uid && d.p1.uid !== online.uid && !d.p1.uid) {
+    await write(() => ref.update({ p1: { uid: online.uid } }));
+  } else if (d.p0.uid !== online.uid && d.p1.uid !== online.uid) {
+    toast("この部屋は満席なので観戦します");
+  }
+  subscribe(code);
+}
+function leaveOnline() {
+  if (online.unsub) online.unsub();
+  online.unsub = null; online.ref = null; online.code = null;
+}
+async function initOnline() {
+  try {
+    if (!window.claude || !window.claude.use) throw 0;
+    const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
+    online.db = db;
+    let id = user ? await user.id() : null;
+    if (!id) { id = load("lc_uid"); if (!id) { id = "g" + Math.random().toString(36).slice(2, 12); store("lc_uid", id); } }
+    online.uid = id;
+  } catch (e) { online.db = null; }
+  online.dbReady = true;
+  if (screen === "start") render();
+}
+
+// ---------- ルール ----------
+function renderRules() {
+  $("#rules").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="ルール">
+    <h2>ルール</h2>
+    <h3>準備</h3>
+    <ul><li>2人とも 1〜10 のカード10枚を手札に持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li></ul>
+    <h3>自分の番</h3>
+    <ol><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li><li>そのあと手札から1枚を裏向きで場に出します（手札がなければ出しません）。</li></ol>
+    <ul><li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
+    <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li></ul>
+    <h3>ルーレットの効果</h3>
+    <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
+    <h3>切り札（1ゲーム1回）</h3>
+    <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない場の裏向きカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
+    <h3>推理アシスト</h3>
+    <p>公開されたカード、推理のハズレ、合計ヒント、判明した地雷と矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
+    <div class="btns"><button class="btn" data-act="close-rules">閉じる</button></div>
+  </div>`;
+  $("#rules").hidden = false;
+}
+
+// ---------- 入力 ----------
+document.addEventListener("click", ev => {
+  const el = ev.target.closest("[data-act]");
+  if (!el) { if (ev.target.id === "rules") $("#rules").hidden = true; return; }
+  const a = el.dataset.act, n = Number(el.dataset.n);
+  switch (a) {
+    case "rules": return renderRules();
+    case "close-rules": $("#rules").hidden = true; return;
+    case "home": clearTimeout(cpuTimer); leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
+    case "mode-cpu": return startCpu();
+    case "resume-cpu": { const g = load("lc_game"); if (!g) return startCpu(); leaveOnline(); S = g; me = 0; ui = {}; screen = "game"; lastSpinId = null; render(); return scheduleCpu(); }
+    case "online-create": return createRoom();
+    case "online-join": return joinRoom($("#joinCode").value);
+    case "copy-code": {
+      const code = online.code || "";
+      try { navigator.clipboard.writeText(code).then(() => toast("コピーしました"), () => toast("コード: " + code)); } catch (e) { toast("コード: " + code); }
+      return;
+    }
+    case "setup-random": ui.setupSel = [...NUMS].sort(() => Math.random() - .5).slice(0, 2).sort((x, y) => x - y); return render();
+    case "setup-ok": if ((ui.setupSel || []).length === 2) confirmSetup([...ui.setupSel].sort((x, y) => x - y)); return;
+    case "guess-open": ui = { mode: "guess" }; return render();
+    case "trump-open": ui = { mode: "trumpA" }; return render();
+    case "cancel": ui = {}; return render();
+    case "spin": return doAct({ type: "spin" });
+    case "pad": {
+      const kind = el.dataset.kind;
+      if (kind === "guess") return doAct({ type: "guess", n });
+      return doAct({ type: "eff", n });
+    }
+    case "opp-field": return doAct({ type: "eff", idx: Number(el.dataset.idx) });
+    case "eff-skip": return doAct({ type: "eff", skip: true });
+    case "eff9-use": return doAct({ type: "eff", use: true });
+    case "eff4-reset": ui.eff4h = null; return render();
+    case "again": {
+      if (S.mode === "cpu") return startCpu();
+      const s = newGame("online", S.p0.uid, S.p1.uid);
+      lastSpinId = null; ui = { setupSel: [] }; S = s; render(); pushOnline(); return;
+    }
+    case "my-card": {
+      const s = S, phase = effPhase(s), mp = P(s, me);
+      if (phase === "setup") {
+        const sel = ui.setupSel || (ui.setupSel = []);
+        const i = sel.indexOf(n);
+        if (i >= 0) sel.splice(i, 1); else { if (sel.length >= 2) sel.shift(); sel.push(n); }
+        return render();
+      }
+      if (ui.mode === "trumpA") { ui = { mode: "trumpB", trumpA: n }; return render(); }
+      if (ui.mode === "trumpB") return doAct({ type: "trump", a: ui.trumpA, b: n });
+      if (s.step === "effect" && s.pending?.eff === 4) {
+        if (ui.eff4h == null) { ui.eff4h = n; return render(); }
+        return doAct({ type: "eff", h: ui.eff4h, f: n });
+      }
+      if (s.step === "effect" && s.pending?.eff === 10) return doAct({ type: "eff", f: n });
+      if (s.step === "place") return doAct({ type: "place", n });
+      return;
+    }
+  }
+});
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { $("#rules").hidden = true; if (ui.mode) { ui = {}; render(); } }
+  if (ev.key === "Enter" && ev.target.id === "joinCode") joinRoom(ev.target.value);
+});
+
+// ---------- 起動 ----------
+function start(data) {
+  if (data && data.S && data.S.mode === "cpu" && data.screen === "game") {
+    S = data.S; me = 0; ui = {}; screen = "game";
+  }
+  render();
+  scheduleCpu();
+  initOnline();
+}
+try { window.claude?.hot?.snapshot?.(() => ({ S: S && S.mode === "cpu" ? S : null, screen: S && S.mode === "cpu" ? screen : "start" })); } catch (e) {}
+(() => {
+  const h = window.claude?.hot;
+  try { if (h?.ready) return h.ready(start); } catch (e) {}
+  start(h?.data ?? {});
+})();
+</script>
