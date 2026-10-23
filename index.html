@@ -109,6 +109,9 @@ button.card.pickable { box-shadow: 0 0 0 2px var(--ok), 0 2px 0 rgba(0,0,0,.25);
 button.card.mine.pickable { box-shadow: 0 0 0 2px var(--brass), 0 0 0 4px var(--ok), 0 2px 0 rgba(0,0,0,.25); }
 button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass), 0 6px 14px rgba(0,0,0,.4); }
 .card.dim { opacity: .38; }
+/* 表になったカードを光らせる（金: 相手の公開カード / 赤: 相手に見えている自分のカード）。box-shadow の枠と重ねられるよう filter で */
+.card.open { filter: drop-shadow(0 0 5px var(--brass)) drop-shadow(0 0 2px var(--brass)); }
+.card.seen { filter: drop-shadow(0 0 5px var(--danger)) drop-shadow(0 0 2px var(--danger)); }
 
 /* center: wheel + action panel */
 .center { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: center; padding-block: 6px; border-block: 1px dashed rgba(214,173,87,.3); }
@@ -674,14 +677,15 @@ function renderGame() {
   // --- 相手席 ---
   const oppField = fieldOf(op), oppHidden = hiddenField(op);
   const pickOpp = myTurn && s.step === "effect" && s.pending?.eff === 1;
+  const oppCls = n => [op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), C(op, n).r ? "open" : ""].join(" ");
   const oppFieldHTML = oppField.length ? oppField.map(n => {
     const c = C(op, n);
-    if (c.r || over) return cardHTML(n, op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), "", "", c.r ? "" : "裏");
+    if (c.r || over) return cardHTML(n, oppCls(n), "", "", c.r ? "公開" : "裏");
     const idx = oppHidden.indexOf(n);
     return pickOpp ? `<button class="card back pickable" data-act="opp-field" data-idx="${idx}" aria-label="裏向きのカード ${idx + 1}"></button>` : `<div class="card back"></div>`;
   }).join("") : `<span class="empty">まだカードはありません</span>`;
   const oppHand = handOf(op);
-  const oppHandHTML = oppHand.length ? oppHand.map(n => C(op, n).r || over ? cardHTML(n, op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), "", "", C(op, n).r ? "" : "手") : `<div class="card back"></div>`).join("") : `<span class="empty">手札なし</span>`;
+  const oppHandHTML = oppHand.length ? oppHand.map(n => C(op, n).r || over ? cardHTML(n, oppCls(n), "", "", C(op, n).r ? "公開" : "手") : `<div class="card back"></div>`).join("") : `<span class="empty">手札なし</span>`;
 
   const seatChips = (p, mine) => [
     `<span class="chip">手札 ${handOf(p).length}</span>`,
@@ -714,6 +718,7 @@ function renderGame() {
     let cls = [];
     if (mp.found.includes(n)) cls.push("found"); else if (isMine(mp, n) && !setupMode) cls.push("mine");
     if (zone === "f" && !c.r) cls.push("veiled");
+    if (c.r) cls.push("seen");
     if (sel) cls.push("sel");
     const can = clickable(n);
     if (can && !setupMode) cls.push("pickable");
@@ -994,7 +999,8 @@ function renderRules() {
     <h3>自分の番</h3>
     <ol><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li><li>そのあと手札から1枚を裏向きで場に出します（手札がなければ出しません）。</li></ol>
     <ul><li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
-    <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li></ul>
+    <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li>
+    <li>表になったカードは光ります。金色は相手の公開済みカード、赤色は相手に見えている自分のカードです。</li></ul>
     <h3>ルーレットの効果</h3>
     <ul><li>2・6・9 はすぐに自動で発動します。それ以外（1・3・4・5・7・8・10）は「使わない」を選んで見送ることもできます。</li><li>5 の偶数／奇数指定は、該当するカードが手札にない場合は無視して自由に出せます。</li><li>9 のお守りは1つまでで、推理を外したときに自動で使われます（効果8の外れには効きません）。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
