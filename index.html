@@ -136,6 +136,7 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .numpad button span { font-family: var(--f-mono); font-size: 10.5px; color: #6d5a52; }
 .numpad button:hover:not([disabled]) { box-shadow: 0 0 0 2px var(--brass); }
 .numpad button[disabled] { opacity: .3; cursor: not-allowed; }
+.numpad button.on { background: var(--brass); box-shadow: 0 0 0 2px var(--ivory); }
 .effect-card { display: flex; gap: 10px; align-items: center; }
 .effect-card .big { font-family: var(--f-num); font-weight: 800; font-size: 40px; color: var(--brass); line-height: 1; min-width: 36px; text-align: center; }
 
@@ -215,16 +216,17 @@ const NUMS = [1,2,3,4,5,6,7,8,9,10];
 const EFFECTS = {
   1: "相手の場の裏向きカードを1枚選んで表にする（場のカードは出された順に並んでいる）",
   2: "相手の地雷2枚の合計値がわかる",
-  3: "相手が最後に出した裏向きカードを表にする",
+  3: "数字を3つ指定し、その中に相手の地雷が何枚あるか聞く",
   4: "自分の手札1枚と場の裏向きカード1枚を入れ替える",
-  5: "相手が次に出すカードは偶数になる",
-  6: "相手が次に出すカードは奇数になる",
+  5: "相手が次に出すカードを偶数か奇数に指定する",
+  6: "相手の地雷2枚の偶奇がわかる（2枚とも偶数／2枚とも奇数／1枚ずつ）",
   7: "数字を1つ指定し、相手のどこにあるか（手札／場）を聞く",
   8: "数字を指定し、相手の場に裏向きであれば表にする（当たれば続けて最大3回。外すとそこで終わり、自分の地雷以外のカードが1枚公開）",
-  9: "お互いの場の裏向きカードの数字を見せ合う（どれが地雷かはわからない）",
+  9: "お守り：次に推理を外したときのペナルティを1回だけ無効にする",
   10: "自分の場の裏向きカードを1枚手札に戻す",
 };
-const SHORT = {1:"1枚めくる",2:"合計ヒント",3:"最新を公開",4:"手札と入替",5:"相手→偶数",6:"相手→奇数",7:"場所を質問",8:"連続指名",9:"見せ合い",10:"手札に戻す"};
+const SHORT = {1:"1枚めくる",2:"合計ヒント",3:"3枚質問",4:"手札と入替",5:"偶奇指定",6:"偶奇ヒント",7:"場所を質問",8:"連続指名",9:"お守り",10:"手札に戻す"};
+const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
 
 // ---------- ゲームエンジン（純粋関数） ----------
@@ -243,7 +245,7 @@ const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
 function newPlayer(uid) {
   const cards = {};
   for (const n of NUMS) cards[n] = { z: "h", r: false, o: 0 };
-  return { uid: uid || null, ready: false, mines: [], found: [], cards, seq: 0, trumpUsed: false, parity: null, facts: [], swapUnrev: null };
+  return { uid: uid || null, ready: false, mines: [], found: [], cards, seq: 0, trumpUsed: false, parity: null, charm: false, facts: [], swapUnrev: null };
 }
 function newGame(mode, uid0, uid1) {
   return { v: 1, mode, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
@@ -287,15 +289,10 @@ function startEffect(s, who, n) {
   switch (n) {
     case 1: return hiddenField(op).length ? pend() : none();
     case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return afterMain(s); }
-    case 3: {
-      const hf = hiddenField(op);
-      if (!hf.length) return none();
-      reveal(s, 1 - who, hf[hf.length - 1], "e3");
-      return afterMain(s);
-    }
     case 4: return handOf(me).length && hiddenField(me).length ? pend() : none();
-    case 5: case 6: op.parity = n === 5 ? "even" : "odd"; addLog(s, { k: "parity", target: 1 - who, par: op.parity }); return afterMain(s);
-    case 7: case 8: case 9: return pend();
+    case 6: { const ev = op.mines.filter(m => m % 2 === 0).length; op.facts.push({ t: "par", ev, e: ep(op) }); addLog(s, { k: "mpar", who, ev }); return afterMain(s); }
+    case 9: me.charm = true; addLog(s, { k: "charm", who }); return afterMain(s);
+    case 3: case 5: case 7: case 8: return pend();
     case 10: return hiddenField(me).length ? pend() : none();
   }
 }
@@ -309,6 +306,18 @@ function resolveEffect(s, who, a) {
       const n = hiddenField(op)[a.idx];
       if (n == null) fail("そのカードは選べません");
       reveal(s, 1 - who, n, "e1"); return afterMain(s);
+    }
+    case 3: {
+      const un = NUMS.filter(n => !C(op, n).r), need = Math.min(3, un.length);
+      const ns = [...new Set(a.ns || [])].sort((x, y) => x - y);
+      if (ns.length !== need || !ns.every(n => un.includes(n))) fail(`まだ公開されていない数字を${need}つ選んでください`);
+      const c = op.mines.filter(m => ns.includes(m)).length;
+      op.facts.push({ t: "cnt", ns, c, e: ep(op) });
+      addLog(s, { k: "cnt", who, ns, c }); return afterMain(s);
+    }
+    case 5: {
+      if (a.par !== "even" && a.par !== "odd") fail("偶数か奇数を選んでください");
+      op.parity = a.par; addLog(s, { k: "parity", target: 1 - who, par: a.par }); return afterMain(s);
     }
     case 4: {
       if (C(me, a.h)?.z !== "h" || !hiddenField(me).includes(a.f)) fail("手札1枚と場の裏向きカード1枚を選んでください");
@@ -335,12 +344,6 @@ function resolveEffect(s, who, a) {
       op.facts.push({ t: "loc", n, z: "nf", at: s.turnNo });
       addLog(s, { k: "e8miss", who, n });
       penalty(s, who); return afterMain(s);
-    }
-    case 9: {
-      const mine = hiddenField(me), theirs = hiddenField(op);
-      for (const n of theirs) op.facts.push({ t: "loc", n, z: "f", at: s.turnNo });
-      for (const n of mine) me.facts.push({ t: "loc", n, z: "f", at: s.turnNo });
-      addLog(s, { k: "show9", who, mine, theirs }); return afterMain(s);
     }
     case 10: {
       if (!hiddenField(me).includes(a.f)) fail("場の裏向きカードを選んでください");
@@ -374,7 +377,8 @@ function act(s0, who, a) {
       const n = a.n;
       if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
       if (isMine(op, n)) { addLog(s, { k: "guessHit", who, n }); reveal(s, 1 - who, n, "guess"); }
-      else { op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n }); penalty(s, who); }
+      else { op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n });
+        if (me.charm) { me.charm = false; addLog(s, { k: "charmUsed", who }); } else penalty(s, who); }
       afterMain(s);
       break;
     }
@@ -414,6 +418,8 @@ function okAt(pair, facts, e) {
     if (f.t === "not" && pair.includes(f.n)) return false;
     if (f.t === "mine" && !pair.includes(f.n)) return false;
     if (f.t === "sum" && pair[0] + pair[1] !== f.s) return false;
+    if (f.t === "cnt" && pair.filter(x => f.ns.includes(x)).length !== f.c) return false;
+    if (f.t === "par" && pair.filter(x => x % 2 === 0).length !== f.ev) return false;
   }
   return true;
 }
@@ -471,13 +477,30 @@ function cpuDecide(s) {
     const r = solve(op);
     const cand = NUMS.filter(n => !C(op, n).r).sort((a, b) => r.prob[b] - r.prob[a]);
     const best = cand[0], pb = r.prob[best];
-    if (pb >= 0.5 || r.count <= 2 || (pb >= 0.34 && Math.random() < 0.5)) return { type: "guess", n: best };
+    if (pb >= 0.5 || r.count <= 2 || (me.charm && pb >= 0.25) || (pb >= 0.34 && Math.random() < 0.5)) return { type: "guess", n: best };
     return { type: "spin" };
   }
   if (s.step === "effect") {
     const e = s.pending.eff, r = solve(op);
     switch (e) {
       case 1: return { type: "eff", idx: Math.floor(Math.random() * hiddenField(op).length) };
+      case 3: {
+        // 答え（0/1/2枚）の分かれ方がいちばん散らばる3つを選ぶ
+        const un = NUMS.filter(n => !C(op, n).r);
+        if (un.length <= 3) return { type: "eff", ns: un };
+        let best = null, bestH = -1;
+        for (let i = 0; i < un.length; i++) for (let j = i + 1; j < un.length; j++) for (let k = j + 1; k < un.length; k++) {
+          const ns = [un[i], un[j], un[k]], d = [0, 0, 0];
+          for (const c of r.list) d[c.pair.filter(x => ns.includes(x)).length] += c.pr;
+          const h = -d.reduce((a, q) => a + (q > 0 ? q * Math.log(q) : 0), 0);
+          if (h > bestH) { bestH = h; best = ns; }
+        }
+        return { type: "eff", ns: best };
+      }
+      case 5: {
+        const w = par => NUMS.filter(n => !C(op, n).r && parityOk(n, par)).reduce((a, n) => a + r.prob[n], 0);
+        return { type: "eff", par: w("even") >= w("odd") ? "even" : "odd" };
+      }
       case 4: {
         const mf = hiddenField(me).filter(n => isMine(me, n)), hs = handOf(me).filter(n => !isMine(me, n));
         return mf.length && hs.length ? { type: "eff", h: rnd(hs), f: mf[0] } : { type: "eff", skip: true };
@@ -495,7 +518,6 @@ function cpuDecide(s) {
         if (rest.length && (s.pending.left === 3 || chance >= 0.5)) return { type: "eff", n: rest[0] };
         return { type: "eff", skip: true };
       }
-      case 9: return { type: "eff", use: !hiddenField(me).some(n => isMine(me, n)) };
       case 10: {
         const mf = hiddenField(me).filter(n => isMine(me, n));
         return mf.length ? { type: "eff", f: mf[0] } : { type: "eff", skip: true };
@@ -534,7 +556,7 @@ const effPhase = s => s.phase === "setup" && bothReady(s) ? "play" : s.phase;
 // ---------- ログ表示（見る人ごとに秘密を隠す） ----------
 function fmt(e, v) {
   const W = nm(e.who, v);
-  const causeTxt = { penalty: "ペナルティで", e1: "効果1で", e3: "効果3で", e8: "効果8で" };
+  const causeTxt = { penalty: "ペナルティで", e1: "効果1で", e8: "効果8で" };
   const par = x => x === "even" ? "偶数" : "奇数";
   switch (e.k) {
     case "guessHit": return [`${W}の推理「${e.n}」→ 的中！`, "hit"];
@@ -551,11 +573,10 @@ function fmt(e, v) {
     case "swap4": return [e.who === v ? `手札の ${e.h} と場の ${e.f} を入れ替えた` : `${W}が手札と場のカードを入れ替えた`];
     case "loc": return [`${W}の質問「${e.n} はどこ？」→ ${e.z === "h" ? "手札" : e.z === "f" ? "場（裏向き）" : "公開済み"}`];
     case "e8miss": return [`${W}の指名「${e.n}」→ 場になし`];
-    case "show9": {
-      if (v === -1) return [`${W}が見せ合いを使った`];
-      const theirs = e.who === v ? e.theirs : e.mine, mine = e.who === v ? e.mine : e.theirs;
-      return [`見せ合い：${oppName()}の場 [${theirs.join(", ") || "なし"}]／あなたの場 [${mine.join(", ") || "なし"}]`];
-    }
+    case "cnt": return [e.who === v ? `${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚` : v === 1 - e.who ? `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた` : `${W}が3枚質問をした`];
+    case "mpar": return [e.who === v ? `${oppName()}の地雷は${MPAR[e.ev]}` : v === 1 - e.who ? `あなたの地雷の偶奇（${MPAR[e.ev]}）を知られた` : `${W}が偶奇ヒントを得た`];
+    case "charm": return [`${W}がお守りを手に入れた`];
+    case "charmUsed": return [`${W}のお守りでペナルティを防いだ`];
     case "take10": return [e.who === v ? `場の ${e.n} を手札に戻した` : `${W}が場のカードを1枚手札に戻した`];
     case "trump": return [e.who === v ? `切り札：地雷を ${e.a} から ${e.b} に移した` : `${W}が切り札を使った（中身は秘密）`, "hit"];
     case "place": return [(e.who === v ? `${e.n} を場に出した` : `${W}がカードを1枚場に出した`) + (e.forced ? `（${par(e.forced)}指定）` : "")];
@@ -666,6 +687,7 @@ function renderGame() {
     `<span class="chip">手札 ${handOf(p).length}</span>`,
     `<span class="chip ${p.found.length ? (mine ? "bad" : "on") : ""}">判明した地雷 ${p.found.length}/2</span>`,
     `<span class="chip ${p.trumpUsed ? "" : "on"}">切り札 ${p.trumpUsed ? "使用済み" : "あり"}</span>`,
+    p.charm ? `<span class="chip on">お守りあり</span>` : "",
     p.parity ? `<span class="chip on">次は${p.parity === "even" ? "偶数" : "奇数"}</span>` : "",
   ].join("");
 
@@ -747,10 +769,10 @@ function renderGame() {
   if (busy) setTimeout(render, spinBusyUntil - Date.now() + 30);
 }
 
-function numpad(kind, op, r) {
+function numpad(kind, op, r, sel = []) {
   return `<div class="numpad">${NUMS.map(n => {
     const dis = C(op, n).r;
-    return `<button data-act="pad" data-kind="${kind}" data-n="${n}" ${dis ? "disabled" : ""} aria-label="${n}"><b>${n}</b><span>${dis ? "公開" : pct(r.prob[n])}</span></button>`;
+    return `<button class="${sel.includes(n) ? "on" : ""}" data-act="pad" data-kind="${kind}" data-n="${n}" ${dis ? "disabled" : ""} aria-label="${n}"><b>${n}</b><span>${dis ? "公開" : pct(r.prob[n])}</span></button>`;
   }).join("")}</div>`;
 }
 
@@ -778,7 +800,7 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
   }
   const r = solve(op);
   if (s.step === "action") {
-    if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>${mp.charm ? "お守りがあるので、外してもペナルティはありません（お守りは消費します）。" : "外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。"}数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、場の裏向きカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>場の裏向きカード</b>を選んでください<small>相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     const canTrump = !mp.trumpUsed && mp.mines.some(m => !mp.found.includes(m)) && hiddenField(mp).some(n => !isMine(mp, n));
@@ -792,12 +814,15 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
     switch (e) {
       case 1: return wrap(`${head}<div class="prompt"><small>相手の場の裏向きカード（緑の枠）をクリックしてください。</small></div><div class="btns">${skip("使わない")}</div>`);
       case 4: return wrap(`${head}<div class="prompt"><small>${ui.eff4h == null ? "まず手札から1枚選んでください。" : `手札の ${ui.eff4h} と入れ替える場の裏向きカードを選んでください。`}</small></div><div class="btns">${ui.eff4h != null ? `<button class="btn quiet sm" data-act="eff4-reset">選び直す</button>` : ""}${skip("使わない")}</div>`);
+      case 3: { const need = Math.min(3, NUMS.filter(n => !C(op, n).r).length), sel = ui.e3 || [];
+        return wrap(`${head}<div class="prompt"><small>数字を ${need} つ選んでください（選択中: ${sel.join("・") || "なし"}）。</small></div>${numpad("e3", op, r, sel)}<div class="btns"><button class="btn sm" data-act="e3-ok" ${sel.length === need ? "" : "disabled"}>この${need}つで聞く</button>${skip("使わない")}</div>`); }
+      case 5: return wrap(`${head}<div class="btns"><button class="btn" data-act="eff5" data-par="even">偶数にさせる</button><button class="btn" data-act="eff5" data-par="odd">奇数にさせる</button>${skip("使わない")}</div>`);
       case 7: return wrap(`${head}${numpad("e7", op, r)}<div class="btns">${skip("使わない")}</div>`);
       case 8: return wrap(`${head}<div class="prompt"><small>残り <b>${s.pending.left}</b> 回。相手の場に裏向きであれば表になります。</small></div>${numpad("e8", op, r)}<div class="btns">${skip(s.pending.left < 3 ? "ここでやめる" : "使わない")}</div>`);
-      case 9: { const mh = hiddenField(mp);
-        return wrap(`${head}<div class="prompt"><small>見せ合うと、あなたの場の裏向きカード [${mh.join(", ") || "なし"}] も相手に見えます。</small></div><div class="btns"><button class="btn" data-act="eff9-use">見せ合う</button>${skip("使わない")}</div>`); }
       case 10: return wrap(`${head}<div class="prompt"><small>手札に戻す場の裏向きカードを選んでください。</small></div><div class="btns">${skip("使わない")}</div>`);
     }
+    // 旧バージョンの保存データ（効果9の選択中など）で止まらないように
+    return wrap(`${head}<div class="btns">${skip("閉じる")}</div>`);
   }
   if (s.step === "place") {
     const ok = mp.parity ? handOf(mp).filter(x => parityOk(x, mp.parity)) : [];
@@ -825,7 +850,8 @@ function renderAssist(s, phase, op, mp, over) {
     const cls = op.found.includes(n) ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "";
     return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tags.join("・"))}</em></span><span class="pct">${pct(p)}</span></div>`;
   }).join("");
-  const sums = op.facts.filter(f => f.t === "sum").map(f => f.s + (op.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
+  const hints = op.facts.filter(f => ["sum", "cnt", "par"].includes(f.t)).map(f =>
+    (f.t === "sum" ? `合計 ${f.s}` : f.t === "cnt" ? `[${f.ns.join(",")}] に ${f.c} 枚` : MPAR[f.ev]) + (op.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
   // 自分の地雷がどれだけ読まれているか
   let exposure = "";
   if (me !== -1) {
@@ -837,7 +863,7 @@ function renderAssist(s, phase, op, mp, over) {
     <h2>推理アシスト <small>候補 ${r.count} / 45 通り</small></h2>
     <div class="prob">${rows}</div>
     <div class="combos">${top.map((c, i) => `<span class="combo ${i === 0 && r.count > 1 ? "top" : ""}"><b>${c.pair[0]}・${c.pair[1]}</b> ${pct(c.pr)}</span>`).join("")}${r.count > top.length ? `<span class="combo">ほか ${r.count - top.length} 通り</span>` : ""}</div>
-    <p class="note">公開カード・推理のハズレ・判明した地雷${sums.length ? `・合計ヒント（${sums.join(", ")}）` : ""}と矛盾しない組み合わせを全列挙しています。${op.trumpUsed ? `<br>${oppName()}は切り札を使用済み：入れ替え前の候補 × 移し先の全パターンを合成して計算しています。` : ""}</p>
+    <p class="note">公開カード・推理のハズレ・判明した地雷${hints.length ? `・ヒント（${hints.join("／")}）` : ""}と矛盾しない組み合わせを全列挙しています。${op.trumpUsed ? `<br>${oppName()}は切り札を使用済み：入れ替え前の候補 × 移し先の全パターンを合成して計算しています。` : ""}</p>
     ${exposure}
   </section>`;
 }
@@ -970,13 +996,13 @@ function renderRules() {
     <ul><li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
     <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li></ul>
     <h3>ルーレットの効果</h3>
-    <ul><li>2・3・5・6 はすぐに自動で発動します。それ以外（1・4・7・8・9・10）は「使わない」を選んで見送ることもできます。</li><li>5・6 の偶数／奇数指定は、該当するカードが手札にない場合は無視して自由に出せます。</li></ul>
+    <ul><li>2・6・9 はすぐに自動で発動します。それ以外（1・3・4・5・7・8・10）は「使わない」を選んで見送ることもできます。</li><li>5 の偶数／奇数指定は、該当するカードが手札にない場合は無視して自由に出せます。</li><li>9 のお守りは1つまでで、推理を外したときに自動で使われます（効果8の外れには効きません）。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
     <h3>切り札（1ゲーム1回）</h3>
     <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない場の裏向きカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
     <h3>推理アシスト</h3>
-    <p>公開されたカード、推理のハズレ、合計ヒント、判明した地雷と矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
-    <p>効果7・8・9でわかったカードの位置（手札にある／場にある／場にない）も表示します。相手がカードを出したり効果4・10で動かしたりして位置が変わった可能性があるときは、「T5時点で手札」のように、いつの情報かを添えて表示します。</p>
+    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・6のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
+    <p>効果7・8でわかったカードの位置（手札にある／場にある／場にない）も表示します。相手がカードを出したり効果4・10で動かしたりして位置が変わった可能性があるときは、「T5時点で手札」のように、いつの情報かを添えて表示します。</p>
     <div class="btns"><button class="btn" data-act="close-rules">閉じる</button></div>
   </div>`;
   $("#rules").hidden = false;
@@ -1009,11 +1035,17 @@ document.addEventListener("click", ev => {
     case "pad": {
       const kind = el.dataset.kind;
       if (kind === "guess") return doAct({ type: "guess", n });
+      if (kind === "e3") {
+        const sel = ui.e3 || (ui.e3 = []), i = sel.indexOf(n);
+        if (i >= 0) sel.splice(i, 1); else { if (sel.length >= 3) sel.shift(); sel.push(n); }
+        return render();
+      }
       return doAct({ type: "eff", n });
     }
     case "opp-field": return doAct({ type: "eff", idx: Number(el.dataset.idx) });
     case "eff-skip": return doAct({ type: "eff", skip: true });
-    case "eff9-use": return doAct({ type: "eff", use: true });
+    case "e3-ok": return doAct({ type: "eff", ns: ui.e3 || [] });
+    case "eff5": return doAct({ type: "eff", par: el.dataset.par });
     case "eff4-reset": ui.eff4h = null; return render();
     case "again": {
       if (S.mode === "cpu") return startCpu();
