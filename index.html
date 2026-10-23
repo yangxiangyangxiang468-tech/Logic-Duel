@@ -265,6 +265,8 @@ function reveal(s, owner, n, cause) {
     addLog(s, { k: "reveal", owner, n, mine: false, cause });
   }
 }
+// カードが動いたら、その移動で崩れうる位置情報（loc）を「古い情報」にする
+function staleLoc(p, zs) { for (const f of p.facts) if (f.t === "loc" && zs.includes(f.z)) f.old = true; }
 function penalty(s, who) {
   const p = P(s, who);
   const pool = NUMS.filter(n => !C(p, n).r && !isMine(p, n));
@@ -312,6 +314,7 @@ function resolveEffect(s, who, a) {
       if (C(me, a.h)?.z !== "h" || !hiddenField(me).includes(a.f)) fail("手札1枚と場の裏向きカード1枚を選んでください");
       const ch = C(me, a.h), cf = C(me, a.f);
       ch.z = "f"; ch.o = cf.o; cf.z = "h"; cf.o = 0;
+      staleLoc(me, ["h", "f", "nf"]);
       addLog(s, { k: "swap4", who, h: a.h, f: a.f }); return afterMain(s);
     }
     case 7: {
@@ -342,6 +345,7 @@ function resolveEffect(s, who, a) {
     case 10: {
       if (!hiddenField(me).includes(a.f)) fail("場の裏向きカードを選んでください");
       C(me, a.f).z = "h"; C(me, a.f).o = 0;
+      staleLoc(me, ["f"]);
       addLog(s, { k: "take10", who, n: a.f }); return afterMain(s);
     }
   }
@@ -392,6 +396,7 @@ function act(s0, who, a) {
         if (ok.length && !parityOk(n, me.parity)) fail(me.parity === "even" ? "偶数のカードを出してください" : "奇数のカードを出してください");
       }
       C(me, n).z = "f"; C(me, n).o = ++me.seq;
+      staleLoc(me, ["h", "nf"]);
       addLog(s, { k: "place", who, n, forced: me.parity });
       me.parity = null;
       endTurn(s);
@@ -440,7 +445,9 @@ function solve(p) {
   for (const c of list) { prob[c.pair[0]] += c.pr; prob[c.pair[1]] += c.pr; }
   return { count: list.length, total, list, prob, map: W };
 }
-const lastLoc = (p, n) => { for (let i = p.facts.length - 1; i >= 0; i--) { const f = p.facts[i]; if (f.t === "loc" && f.n === n) return f.z; } return null; };
+// 位置情報は最後に得たものだけが意味を持つ。lastLoc は古くなっていない情報だけを返す
+const lastLocFact = (p, n) => { for (let i = p.facts.length - 1; i >= 0; i--) { const f = p.facts[i]; if (f.t === "loc" && f.n === n) return f; } return null; };
+const lastLoc = (p, n) => { const f = lastLocFact(p, n); return f && !f.old ? f.z : null; };
 
 // ---------- CPU ----------
 function cpuDecide(s) {
@@ -811,7 +818,9 @@ function renderAssist(s, phase, op, mp, over) {
     else if (c.r) tags.push("公開・地雷ではない");
     else {
       if (op.facts.some(f => f.t === "not" && f.n === n)) tags.push("推理ハズレ");
-      const l = lastLoc(op, n); if (l === "h") tags.push("手札にある"); else if (l === "f") tags.push("場にある"); else if (l === "nf") tags.push("場にない");
+      const f = lastLocFact(op, n);
+      if (f && !f.old) tags.push({ h: "手札にある", f: "場にある", nf: "場にない" }[f.z] || "");
+      else if (f) tags.push(`T${f.at}時点で` + ({ h: "手札", f: "場", nf: "場になし" }[f.z] || ""));
     }
     const cls = op.found.includes(n) ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "";
     return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tags.join("・"))}</em></span><span class="pct">${pct(p)}</span></div>`;
@@ -967,6 +976,7 @@ function renderRules() {
     <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない場の裏向きカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
     <h3>推理アシスト</h3>
     <p>公開されたカード、推理のハズレ、合計ヒント、判明した地雷と矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
+    <p>効果7・8・9でわかったカードの位置（手札にある／場にある／場にない）も表示します。相手がカードを出したり効果4・10で動かしたりして位置が変わった可能性があるときは、「T5時点で手札」のように、いつの情報かを添えて表示します。</p>
     <div class="btns"><button class="btn" data-act="close-rules">閉じる</button></div>
   </div>`;
   $("#rules").hidden = false;
