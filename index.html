@@ -106,6 +106,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); out
 button.card { cursor: pointer; transition: transform .12s, box-shadow .12s; }
 button.card:hover { transform: translateY(-4px); }
 button.card.pickable { box-shadow: 0 0 0 2px var(--ok), 0 2px 0 rgba(0,0,0,.25); }
+button.card.mine.pickable { box-shadow: 0 0 0 2px var(--brass), 0 0 0 4px var(--ok), 0 2px 0 rgba(0,0,0,.25); }
 button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass), 0 6px 14px rgba(0,0,0,.4); }
 .card.dim { opacity: .38; }
 
@@ -212,15 +213,15 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 // ---------- 定数 ----------
 const NUMS = [1,2,3,4,5,6,7,8,9,10];
 const EFFECTS = {
-  1: "相手の場の裏向きカードを1枚選んで表にする",
+  1: "相手の場の裏向きカードを1枚選んで表にする（場のカードは出された順に並んでいる）",
   2: "相手の地雷2枚の合計値がわかる",
   3: "相手が最後に出した裏向きカードを表にする",
   4: "自分の手札1枚と場の裏向きカード1枚を入れ替える",
   5: "相手が次に出すカードは偶数になる",
   6: "相手が次に出すカードは奇数になる",
   7: "数字を1つ指定し、相手のどこにあるか（手札／場）を聞く",
-  8: "数字を指定し、相手の場に裏向きであれば表にする（最大3回。外すと自分のカードが1枚公開）",
-  9: "お互いの場の裏向きカードを見せ合う（使わなくてもよい）",
+  8: "数字を指定し、相手の場に裏向きであれば表にする（当たれば続けて最大3回。外すとそこで終わり、自分の地雷以外のカードが1枚公開）",
+  9: "お互いの場の裏向きカードの数字を見せ合う（どれが地雷かはわからない）",
   10: "自分の場の裏向きカードを1枚手札に戻す",
 };
 const SHORT = {1:"1枚めくる",2:"合計ヒント",3:"最新を公開",4:"手札と入替",5:"相手→偶数",6:"相手→奇数",7:"場所を質問",8:"連続指名",9:"見せ合い",10:"手札に戻す"};
@@ -328,6 +329,7 @@ function resolveEffect(s, who, a) {
         if (s.pending.left <= 0 || !hiddenField(op).length) return afterMain(s);
         return;
       }
+      op.facts.push({ t: "loc", n, z: "nf", at: s.turnNo });
       addLog(s, { k: "e8miss", who, n });
       penalty(s, who); return afterMain(s);
     }
@@ -480,7 +482,7 @@ function cpuDecide(s) {
       case 8: {
         const hidden = hiddenField(op).length;
         const known = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) === "f").sort((a, b) => r.prob[b] - r.prob[a]);
-        const rest = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) !== "f" && lastLoc(op, n) !== "h").sort((a, b) => r.prob[b] - r.prob[a]);
+        const rest = NUMS.filter(n => !C(op, n).r && !["f", "h", "nf"].includes(lastLoc(op, n))).sort((a, b) => r.prob[b] - r.prob[a]);
         if (known.length) return { type: "eff", n: known[0] };
         const chance = rest.length ? hidden / rest.length : 0;
         if (rest.length && (s.pending.left === 3 || chance >= 0.5)) return { type: "eff", n: rest[0] };
@@ -655,7 +657,7 @@ function renderGame() {
 
   const seatChips = (p, mine) => [
     `<span class="chip">手札 ${handOf(p).length}</span>`,
-    `<span class="chip ${p.found.length ? "bad" : ""}">判明した地雷 ${p.found.length}/2</span>`,
+    `<span class="chip ${p.found.length ? (mine ? "bad" : "on") : ""}">判明した地雷 ${p.found.length}/2</span>`,
     `<span class="chip ${p.trumpUsed ? "" : "on"}">切り札 ${p.trumpUsed ? "使用済み" : "あり"}</span>`,
     p.parity ? `<span class="chip on">次は${p.parity === "even" ? "偶数" : "奇数"}</span>` : "",
   ].join("");
@@ -724,11 +726,11 @@ function renderGame() {
   opp.className = "seat" + (phase === "play" && s.turn === o ? " turn" : "");
   mine.className = "seat" + (phase === "play" && s.turn === mySeat ? " turn" : "");
   opp.innerHTML = `
-        <div class="seat-head"><span class="seat-name">${me === -1 ? "P2" : esc(oppName())}</span>${seatChips(op)}</div>
+        <div class="seat-head"><span class="seat-name">${me === -1 ? "P2" : esc(oppName())}</span>${seatChips(op, false)}</div>
         <div class="zone"><span class="zone-label">場</span><div class="cards">${oppFieldHTML}</div></div>
         <div class="zone"><span class="zone-label">手札</span><div class="cards">${oppHandHTML}</div></div>`;
   mine.innerHTML = `
-        <div class="seat-head"><span class="seat-name">${me === -1 ? "P1" : "あなた"}</span>${setupMode ? "" : seatChips(mp)}</div>
+        <div class="seat-head"><span class="seat-name">${me === -1 ? "P1" : "あなた"}</span>${setupMode ? "" : seatChips(mp, me !== -1)}</div>
         <div class="zone"><span class="zone-label">場</span><div class="cards">${myField.length ? myField.map(n => myCard(n, "f")).join("") : `<span class="empty">まだカードはありません</span>`}</div></div>
         <div class="zone"><span class="zone-label">手札</span><div class="cards">${myHand.length ? myHand.map(n => myCard(n, "h")).join("") : `<span class="empty">手札なし</span>`}</div></div>`;
   $("#panel").outerHTML = panel.replace('<div class="panel">', '<div class="panel" id="panel">');
@@ -809,7 +811,7 @@ function renderAssist(s, phase, op, mp, over) {
     else if (c.r) tags.push("公開・地雷ではない");
     else {
       if (op.facts.some(f => f.t === "not" && f.n === n)) tags.push("推理ハズレ");
-      const l = lastLoc(op, n); if (l === "h") tags.push("手札にある"); else if (l === "f") tags.push("場にある");
+      const l = lastLoc(op, n); if (l === "h") tags.push("手札にある"); else if (l === "f") tags.push("場にある"); else if (l === "nf") tags.push("場にない");
     }
     const cls = op.found.includes(n) ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "";
     return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tags.join("・"))}</em></span><span class="pct">${pct(p)}</span></div>`;
@@ -820,7 +822,7 @@ function renderAssist(s, phase, op, mp, over) {
   if (me !== -1) {
     const mr = solve(mp), key = [...mp.mines].sort((a, b) => a - b).join("-");
     const ex = mr.total ? (mr.map.get(key) || 0) / mr.total : 0;
-    exposure = `<div class="note">${oppName()}から見たあなたの地雷：候補 ${mr.count} 通り、正解を引かれる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>`;
+    exposure = `<div class="note">${oppName()}から見たあなたの地雷：候補 ${mr.count} 通り、2枚の組み合わせをぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>`;
   }
   return `<section class="box">
     <h2>推理アシスト <small>候補 ${r.count} / 45 通り</small></h2>
@@ -953,12 +955,13 @@ function renderRules() {
   $("#rules").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="ルール">
     <h2>ルール</h2>
     <h3>準備</h3>
-    <ul><li>2人とも 1〜10 のカード10枚を手札に持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li></ul>
+    <ul><li>2人とも 1〜10 のカード10枚を手札に持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li></ul>
     <h3>自分の番</h3>
     <ol><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li><li>そのあと手札から1枚を裏向きで場に出します（手札がなければ出しません）。</li></ol>
     <ul><li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
     <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li></ul>
     <h3>ルーレットの効果</h3>
+    <ul><li>2・3・5・6 はすぐに自動で発動します。それ以外（1・4・7・8・9・10）は「使わない」を選んで見送ることもできます。</li><li>5・6 の偶数／奇数指定は、該当するカードが手札にない場合は無視して自由に出せます。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
     <h3>切り札（1ゲーム1回）</h3>
     <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない場の裏向きカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
