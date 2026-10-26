@@ -214,6 +214,12 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .result.lose { color: var(--muted); }
 
 /* 効果一覧（サイドの最上部）と、ルーレットが止まったときの大きな表示 */
+.fxbox summary { list-style: none; cursor: pointer; }
+.fxbox summary::-webkit-details-marker { display: none; }
+.fxbox summary h2::before { content: "▸"; font-family: var(--f-body); font-size: 12px; color: var(--muted); }
+.fxbox[open] summary h2::before { content: "▾"; }
+.fxbox summary h2 small { margin-left: auto; }
+.fxbody { display: grid; gap: 10px; margin-top: 10px; }
 .fxgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
 .fxgrid .fx { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; min-width: 0; }
 .fxgrid .fx b { font-family: var(--f-num); color: var(--brass); font-size: 15px; min-width: 18px; text-align: right; }
@@ -859,12 +865,17 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
 }
 
 // 回転中は結果を先に見せないよう、止まってから直前の目を光らせる
+// 折りたたみ状態は見る人ごとの好みなので localStorage に保存（既定は開く）
+let fxOpen = load("lc_fx_open") ?? true;
 function renderFx(s, busy) {
   const sp = !busy && s.spin ? s.spin : null;
-  return `<section class="box"><h2>ルーレットの効果</h2>
-    <div class="fxgrid">${NUMS.map(n => `<div class="fx ${sp && sp.n === n ? "now" : ""}" title="${esc(EFFECTS[n])}"><b>${n}</b>${esc(SHORT[n])}</div>`).join("")}</div>
-    ${sp ? `<p class="note"><b>${sp.n}</b>（${esc(nm(sp.who, me))}が直前に出した）${esc(EFFECTS[sp.n])}</p>` : ""}
-  </section>`;
+  return `<section class="box"><details class="fxbox" id="fxbox" ${fxOpen ? "open" : ""}>
+    <summary><h2>ルーレットの効果 ${sp && !fxOpen ? `<small>直前 ${sp.n}「${esc(SHORT[sp.n])}」</small>` : ""}</h2></summary>
+    <div class="fxbody">
+      <div class="fxgrid">${NUMS.map(n => `<div class="fx ${sp && sp.n === n ? "now" : ""}" title="${esc(EFFECTS[n])}"><b>${n}</b>${esc(SHORT[n])}</div>`).join("")}</div>
+      ${sp ? `<p class="note"><b>${sp.n}</b>（${esc(nm(sp.who, me))}が直前に出した）${esc(EFFECTS[sp.n])}</p>` : ""}
+    </div>
+  </details></section>`;
 }
 
 function renderAssist(s, phase, op, mp, over) {
@@ -1116,6 +1127,11 @@ document.addEventListener("click", ev => {
     }
   }
 });
+// toggle はバブリングしないのでキャプチャで拾う
+document.addEventListener("toggle", ev => {
+  if (ev.target.id !== "fxbox" || ev.target.open === fxOpen) return;
+  fxOpen = ev.target.open; store("lc_fx_open", fxOpen); render();
+}, true);
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape") { $("#rules").hidden = true; if (ui.mode) { ui = {}; render(); } }
   if (ev.key === "Enter" && ev.target.id === "joinCode") joinRoom(ev.target.value);
