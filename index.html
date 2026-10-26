@@ -74,8 +74,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); out
 .seat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .seat-name { font-family: var(--f-display); font-size: 18px; letter-spacing: .08em; color: var(--ivory); margin-right: 4px; }
 .seat.turn .seat-name { color: var(--brass); }
-.zone { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; }
-.zone-label { font-size: 11px; letter-spacing: .16em; color: var(--muted); }
 .cards { display: flex; flex-wrap: wrap; gap: 6px; min-height: 64px; align-items: center; }
 .empty { color: var(--muted); font-size: 12px; opacity: .7; }
 
@@ -97,7 +95,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); out
   border: 2px solid var(--ivory);
   color: transparent;
 }
-.card.veiled { background: color-mix(in srgb, var(--ivory) 72%, var(--felt)); border: 1px dashed var(--ink); }
+.card.decoy { border: 2px dashed var(--ok); }
 .card .tag { position: absolute; top: 2px; left: 3px; font-family: var(--f-body); font-size: 9px; font-weight: 700; letter-spacing: .04em; color: var(--ink); opacity: .7; }
 .card.mine { box-shadow: 0 0 0 2px var(--brass), 0 2px 0 rgba(0,0,0,.25); }
 .card.mine::after { content: "地雷"; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); font-family: var(--f-body); font-size: 9px; font-weight: 700; background: var(--brass); color: var(--ink); padding: 0 4px; border-radius: 3px; letter-spacing: .05em; }
@@ -250,41 +248,42 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 // ---------- 定数 ----------
 const NUMS = [1,2,3,4,5,6,7,8,9,10];
 const EFFECTS = {
-  1: "相手の場の裏向きカードを1枚選んで表にする（場のカードは出された順に並んでいる）",
+  1: "相手の公開されていないカードを1枚ランダムに公開する（地雷なら判明）",
   2: "相手の地雷2枚の合計値がわかる",
   3: "数字を3つ指定し、その中に相手の地雷が何枚あるか聞く",
-  4: "自分の手札1枚と場の裏向きカード1枚を入れ替える",
+  4: "シールド：相手が次にあなたのヒント（2・3・5・6・7）を得るのを1回防ぐ",
   5: "相手の地雷2枚のうち、6以上が何枚あるかわかる",
   6: "相手の地雷2枚の偶奇がわかる（2枚とも偶数／2枚とも奇数／1枚ずつ）",
-  7: "数字を1つ指定し、相手のどこにあるか（手札／場）を聞く",
-  8: "数字を指定し、相手の場に裏向きであれば表にする（当たれば続けて最大3回。外すとそこで終わり、自分の地雷以外のカードが1枚公開）",
-  9: "お守り：次に推理を外したときのペナルティを1回だけ無効にする",
-  10: "自分の場の裏向きカードを1枚手札に戻す",
+  7: "数字を1つ指定し、いちばん近い相手の地雷までの差を聞く",
+  8: "数字を1つ指名し、相手のそのカードを公開する（地雷なら判明。外れてもペナルティなし）",
+  9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ。相手がその数字を推理して外したらペナルティが2枚になる",
+  10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
 };
-const SHORT = {1:"1枚めくる",2:"合計ヒント",3:"3枚質問",4:"手札と入替",5:"大小ヒント",6:"偶奇ヒント",7:"場所を質問",8:"連続指名",9:"お守り",10:"手札に戻す"};
+const SHORT = {1:"ランダム公開",2:"合計ヒント",3:"3枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
+const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
+const STATE_V = 2; // 場のあった旧ルール（v1）の保存データは読み込まない
 
 // ---------- ゲームエンジン（純粋関数） ----------
 const clone = o => JSON.parse(JSON.stringify(o));
 const P = (s, i) => s["p" + i];
 const C = (p, n) => p.cards[n];
-const handOf = p => NUMS.filter(n => C(p, n).z === "h");
-const fieldOf = p => NUMS.filter(n => C(p, n).z === "f").sort((a, b) => C(p, a).o - C(p, b).o);
-const hiddenField = p => fieldOf(p).filter(n => !C(p, n).r);
+const hidden = p => NUMS.filter(n => !C(p, n).r);
 const isMine = (p, n) => p.mines.includes(n);
 const ep = p => p.trumpUsed ? 1 : 0;
 const bothReady = s => s.p0.ready && s.p1.ready;
 const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
+const distTo = (x, pair) => Math.min(Math.abs(x - pair[0]), Math.abs(x - pair[1]));
 
 function newPlayer(uid) {
   const cards = {};
-  for (const n of NUMS) cards[n] = { z: "h", r: false, o: 0 };
-  return { uid: uid || null, ready: false, mines: [], found: [], cards, seq: 0, trumpUsed: false, charm: false, facts: [], swapUnrev: null };
+  for (const n of NUMS) cards[n] = { r: false };
+  return { uid: uid || null, ready: false, mines: [], found: [], cards, trumpUsed: false, shield: false, decoy: null, sealed: false, facts: [], swapUnrev: null };
 }
 function newGame(mode, uid0, uid1) {
-  return { v: 1, mode, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
+  return { v: STATE_V, mode, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
 }
 function addLog(s, e) { e.t = s.turnNo; s.log.push(e); if (s.log.length > 90) s.log.splice(0, s.log.length - 90); }
 function fail(msg) { const e = new Error(msg); e.user = true; throw e; }
@@ -293,6 +292,7 @@ function reveal(s, owner, n, cause) {
   const p = P(s, owner), c = C(p, n);
   if (c.r) return;
   c.r = true;
+  if (p.decoy === n) p.decoy = null;
   if (isMine(p, n) && !p.found.includes(n)) {
     p.found.push(n);
     p.facts.push({ t: "mine", n, e: ep(p) });
@@ -303,86 +303,61 @@ function reveal(s, owner, n, cause) {
     addLog(s, { k: "reveal", owner, n, mine: false, cause });
   }
 }
-// カードが動いたら、その移動で崩れうる位置情報（loc）を「古い情報」にする
-function staleLoc(p, zs) { for (const f of p.facts) if (f.t === "loc" && zs.includes(f.z)) f.old = true; }
 function penalty(s, who) {
   const p = P(s, who);
   const pool = NUMS.filter(n => !C(p, n).r && !isMine(p, n));
   if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
   reveal(s, who, rnd(pool), "penalty");
 }
-function endTurn(s) { s.turn = 1 - s.turn; s.turnNo++; s.step = "action"; s.pending = null; }
-function afterMain(s) {
+// 封印は「封印された人の次の番」だけ効くので、その人の番が終わるときに解く
+function endTurn(s) {
   if (s.phase === "over") return;
-  s.pending = null; s.step = "place";
-  if (!handOf(P(s, s.turn)).length) { addLog(s, { k: "nohand", who: s.turn }); endTurn(s); }
+  P(s, s.turn).sealed = false;
+  s.turn = 1 - s.turn; s.turnNo++; s.step = "action"; s.pending = null;
 }
 
 function startEffect(s, who, n) {
   const me = P(s, who), op = P(s, 1 - who);
-  const pend = () => { s.step = "effect"; s.pending = { eff: n, left: n === 8 ? 3 : 0 }; };
-  const none = () => { addLog(s, { k: "none", who }); afterMain(s); };
+  const pend = () => { s.step = "effect"; s.pending = { eff: n }; };
+  if (HINT_EFFECTS.includes(n) && op.shield) { op.shield = false; addLog(s, { k: "shieldBlock", who, target: 1 - who }); return endTurn(s); }
   switch (n) {
-    case 1: return hiddenField(op).length ? pend() : none();
-    case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return afterMain(s); }
-    case 4: return handOf(me).length && hiddenField(me).length ? pend() : none();
-    case 5: { const ev = op.mines.filter(m => m >= 6).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return afterMain(s); }
-    case 6: { const ev = op.mines.filter(m => m % 2 === 0).length; op.facts.push({ t: "par", ev, e: ep(op) }); addLog(s, { k: "mpar", who, ev }); return afterMain(s); }
-    case 9: me.charm = true; addLog(s, { k: "charm", who }); return afterMain(s);
+    case 1: { const h = hidden(op); if (!h.length) { addLog(s, { k: "none", who }); return endTurn(s); } reveal(s, 1 - who, rnd(h), "e1"); return endTurn(s); }
+    case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return endTurn(s); }
+    case 4: me.shield = true; addLog(s, { k: "shield", who }); return endTurn(s);
+    case 5: { const ev = op.mines.filter(m => m >= 6).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return endTurn(s); }
+    case 6: { const ev = op.mines.filter(m => m % 2 === 0).length; op.facts.push({ t: "par", ev, e: ep(op) }); addLog(s, { k: "mpar", who, ev }); return endTurn(s); }
+    case 10: op.sealed = true; addLog(s, { k: "seal", who, target: 1 - who }); return endTurn(s);
+    case 9: if (!hidden(me).some(x => !isMine(me, x))) { addLog(s, { k: "none", who }); return endTurn(s); } return pend();
     case 3: case 7: case 8: return pend();
-    case 10: return hiddenField(me).length ? pend() : none();
   }
 }
 
 function resolveEffect(s, who, a) {
   if (s.step !== "effect" || !s.pending) fail("効果の選択中ではありません");
   const me = P(s, who), op = P(s, 1 - who), eff = s.pending.eff;
-  if (a.skip) { addLog(s, { k: eff === 8 && s.pending.left < 3 ? "stop8" : "skip", who }); return afterMain(s); }
+  if (a.skip) { addLog(s, { k: "skip", who }); return endTurn(s); }
   switch (eff) {
-    case 1: {
-      const n = hiddenField(op)[a.idx];
-      if (n == null) fail("そのカードは選べません");
-      reveal(s, 1 - who, n, "e1"); return afterMain(s);
-    }
     case 3: {
-      const un = NUMS.filter(n => !C(op, n).r), need = Math.min(3, un.length);
+      const un = hidden(op), need = Math.min(3, un.length);
       const ns = [...new Set(a.ns || [])].sort((x, y) => x - y);
       if (ns.length !== need || !ns.every(n => un.includes(n))) fail(`まだ公開されていない数字を${need}つ選んでください`);
       const c = op.mines.filter(m => ns.includes(m)).length;
       op.facts.push({ t: "cnt", ns, c, e: ep(op) });
-      addLog(s, { k: "cnt", who, ns, c }); return afterMain(s);
-    }
-    case 4: {
-      if (C(me, a.h)?.z !== "h" || !hiddenField(me).includes(a.f)) fail("手札1枚と場の裏向きカード1枚を選んでください");
-      const ch = C(me, a.h), cf = C(me, a.f);
-      ch.z = "f"; ch.o = cf.o; cf.z = "h"; cf.o = 0;
-      staleLoc(me, ["h", "f", "nf"]);
-      addLog(s, { k: "swap4", who, h: a.h, f: a.f }); return afterMain(s);
+      addLog(s, { k: "cnt", who, ns, c }); return endTurn(s);
     }
     case 7: {
-      const n = a.n; if (!NUMS.includes(n)) fail("数字を選んでください");
-      const z = C(op, n).r ? "r" : C(op, n).z;
-      op.facts.push({ t: "loc", n, z, at: s.turnNo });
-      addLog(s, { k: "loc", who, n, z }); return afterMain(s);
+      const x = a.n; if (!NUMS.includes(x)) fail("数字を選んでください");
+      const d = distTo(x, op.mines);
+      op.facts.push({ t: "dist", x, d, e: ep(op) });
+      addLog(s, { k: "dist", who, x, d }); return endTurn(s);
     }
     case 8: {
       const n = a.n; if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
-      if (hiddenField(op).includes(n)) {
-        reveal(s, 1 - who, n, "e8");
-        if (s.phase === "over") return;
-        s.pending.left--;
-        if (s.pending.left <= 0 || !hiddenField(op).length) return afterMain(s);
-        return;
-      }
-      op.facts.push({ t: "loc", n, z: "nf", at: s.turnNo });
-      addLog(s, { k: "e8miss", who, n });
-      penalty(s, who); return afterMain(s);
+      reveal(s, 1 - who, n, "e8"); return endTurn(s);
     }
-    case 10: {
-      if (!hiddenField(me).includes(a.f)) fail("場の裏向きカードを選んでください");
-      C(me, a.f).z = "h"; C(me, a.f).o = 0;
-      staleLoc(me, ["f"]);
-      addLog(s, { k: "take10", who, n: a.f }); return afterMain(s);
+    case 9: {
+      const n = a.n; if (!NUMS.includes(n) || C(me, n).r || isMine(me, n)) fail("地雷ではない、公開されていない自分のカードを選んでください");
+      me.decoy = n; addLog(s, { k: "decoy", who, n }); return endTurn(s);
     }
   }
 }
@@ -398,9 +373,10 @@ function act(s0, who, a) {
       if (s.step !== "action") fail("切り札は自分の番の最初に使えます");
       if (me.trumpUsed) fail("切り札はもう使いました");
       if (!me.mines.includes(a.a) || me.found.includes(a.a)) fail("判明していない地雷を選んでください");
-      if (!hiddenField(me).includes(a.b) || isMine(me, a.b)) fail("地雷ではない場の裏向きカードを選んでください");
+      if (C(me, a.b)?.r !== false || isMine(me, a.b)) fail("地雷ではない、公開されていないカードを選んでください");
       me.swapUnrev = NUMS.filter(n => !C(me, n).r && !me.found.includes(n));
       me.mines = me.mines.map(x => x === a.a ? a.b : x);
+      if (me.decoy === a.b) me.decoy = null;
       me.trumpUsed = true;
       addLog(s, { k: "trump", who, a: a.a, b: a.b });
       break;
@@ -410,30 +386,30 @@ function act(s0, who, a) {
       const n = a.n;
       if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
       if (isMine(op, n)) { addLog(s, { k: "guessHit", who, n }); reveal(s, 1 - who, n, "guess"); }
-      else { op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n });
-        if (me.charm) { me.charm = false; addLog(s, { k: "charmUsed", who }); } else penalty(s, who); }
-      afterMain(s);
+      else {
+        op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n });
+        if (op.decoy === n) { op.decoy = null; addLog(s, { k: "decoyHit", who, n }); penalty(s, who); }
+        penalty(s, who);
+      }
+      endTurn(s);
       break;
     }
     case "spin": {
       if (s.step !== "action") fail("ルーレットは自分の番の最初に回します");
+      if (me.sealed) fail("封印されているので、この番はルーレットを回せません");
       const n = a.n || 1 + Math.floor(Math.random() * 10);
       s.spin = { who, n, id: Date.now() + "-" + Math.floor(Math.random() * 1e6) };
       addLog(s, { k: "spin", who, n });
       startEffect(s, who, n);
       break;
     }
-    case "eff": resolveEffect(s, who, a); break;
-    case "place": {
-      if (s.step !== "place") fail("いまはカードを出す場面ではありません");
-      const n = a.n;
-      if (C(me, n)?.z !== "h") fail("手札のカードを選んでください");
-      C(me, n).z = "f"; C(me, n).o = ++me.seq;
-      staleLoc(me, ["h", "nf"]);
-      addLog(s, { k: "place", who, n });
-      endTurn(s);
+    case "pass": {
+      if (s.step !== "action") fail("いまはパスできません");
+      if (!me.sealed) fail("パスできるのは封印されているときだけです");
+      addLog(s, { k: "pass", who }); endTurn(s);
       break;
     }
+    case "eff": resolveEffect(s, who, a); break;
     default: fail("不明な操作です");
   }
   return s;
@@ -449,6 +425,7 @@ function okAt(pair, facts, e) {
     if (f.t === "cnt" && pair.filter(x => f.ns.includes(x)).length !== f.c) return false;
     if (f.t === "par" && pair.filter(x => x % 2 === 0).length !== f.ev) return false;
     if (f.t === "big" && pair.filter(x => x >= 6).length !== f.ev) return false;
+    if (f.t === "dist" && distTo(f.x, pair) !== f.d) return false;
   }
   return true;
 }
@@ -480,9 +457,13 @@ function solve(p) {
   for (const c of list) { prob[c.pair[0]] += c.pr; prob[c.pair[1]] += c.pr; }
   return { count: list.length, total, list, prob, map: W };
 }
-// 位置情報は最後に得たものだけが意味を持つ。lastLoc は古くなっていない情報だけを返す
-const lastLocFact = (p, n) => { for (let i = p.facts.length - 1; i >= 0; i--) { const f = p.facts[i]; if (f.t === "loc" && f.n === n) return f; } return null; };
-const lastLoc = (p, n) => { const f = lastLocFact(p, n); return f && !f.old ? f.z : null; };
+// 答えの分かれ方のエントロピー（大きいほど、聞く価値がある）
+function entropy(r, answer) {
+  const d = new Map();
+  for (const c of r.list) { const k = answer(c.pair); d.set(k, (d.get(k) || 0) + c.pr); }
+  let h = 0; for (const q of d.values()) if (q > 0) h -= q * Math.log(q);
+  return h;
+}
 
 // ---------- CPU ----------
 function cpuDecide(s) {
@@ -490,7 +471,7 @@ function cpuDecide(s) {
   if (s.step === "action") {
     if (!me.trumpUsed) {
       const unf = me.mines.filter(m => !me.found.includes(m));
-      const spots = hiddenField(me).filter(n => !isMine(me, n));
+      const spots = hidden(me).filter(n => !isMine(me, n));
       if (unf.length && spots.length) {
         const r = solve(me);
         const key = [...me.mines].sort((a, b) => a - b).join("-");
@@ -504,62 +485,46 @@ function cpuDecide(s) {
       }
     }
     const r = solve(op);
-    const cand = NUMS.filter(n => !C(op, n).r).sort((a, b) => r.prob[b] - r.prob[a]);
+    const cand = hidden(op).sort((a, b) => r.prob[b] - r.prob[a]);
     const best = cand[0], pb = r.prob[best];
-    if (pb >= 0.5 || r.count <= 2 || (me.charm && pb >= 0.25) || (pb >= 0.34 && Math.random() < 0.5)) return { type: "guess", n: best };
+    // おとりが仕掛けられているときは、確信が持てるまで推理しない
+    const bold = op.decoy == null && pb >= 0.34 && Math.random() < 0.5;
+    if (pb >= 0.5 || r.count <= 2 || bold) return { type: "guess", n: best };
+    if (me.sealed) return pb >= 0.25 ? { type: "guess", n: best } : { type: "pass" };
     return { type: "spin" };
   }
   if (s.step === "effect") {
     const e = s.pending.eff, r = solve(op);
     switch (e) {
-      case 1: return { type: "eff", idx: Math.floor(Math.random() * hiddenField(op).length) };
       case 3: {
-        // 答え（0/1/2枚）の分かれ方がいちばん散らばる3つを選ぶ
-        const un = NUMS.filter(n => !C(op, n).r);
+        const un = hidden(op);
         if (un.length <= 3) return { type: "eff", ns: un };
         let best = null, bestH = -1;
         for (let i = 0; i < un.length; i++) for (let j = i + 1; j < un.length; j++) for (let k = j + 1; k < un.length; k++) {
-          const ns = [un[i], un[j], un[k]], d = [0, 0, 0];
-          for (const c of r.list) d[c.pair.filter(x => ns.includes(x)).length] += c.pr;
-          const h = -d.reduce((a, q) => a + (q > 0 ? q * Math.log(q) : 0), 0);
+          const ns = [un[i], un[j], un[k]], h = entropy(r, pair => pair.filter(x => ns.includes(x)).length);
           if (h > bestH) { bestH = h; best = ns; }
         }
         return { type: "eff", ns: best };
       }
-      case 4: {
-        const mf = hiddenField(me).filter(n => isMine(me, n)), hs = handOf(me).filter(n => !isMine(me, n));
-        return mf.length && hs.length ? { type: "eff", h: rnd(hs), f: mf[0] } : { type: "eff", skip: true };
-      }
       case 7: {
-        const c = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) == null).sort((a, b) => r.prob[b] - r.prob[a]);
-        return { type: "eff", n: c[0] || NUMS.find(n => !C(op, n).r) || 1 };
+        let best = 1, bestH = -1;
+        for (const x of NUMS) { const h = entropy(r, pair => distTo(x, pair)); if (h > bestH) { bestH = h; best = x; } }
+        return { type: "eff", n: best };
       }
-      case 8: {
-        const hidden = hiddenField(op).length;
-        const known = NUMS.filter(n => !C(op, n).r && lastLoc(op, n) === "f").sort((a, b) => r.prob[b] - r.prob[a]);
-        const rest = NUMS.filter(n => !C(op, n).r && !["f", "h", "nf"].includes(lastLoc(op, n))).sort((a, b) => r.prob[b] - r.prob[a]);
-        if (known.length) return { type: "eff", n: known[0] };
-        const chance = rest.length ? hidden / rest.length : 0;
-        if (rest.length && (s.pending.left === 3 || chance >= 0.5)) return { type: "eff", n: rest[0] };
-        return { type: "eff", skip: true };
-      }
-      case 10: {
-        const mf = hiddenField(me).filter(n => isMine(me, n));
-        return mf.length ? { type: "eff", f: mf[0] } : { type: "eff", skip: true };
+      case 8: return { type: "eff", n: hidden(op).sort((a, b) => r.prob[b] - r.prob[a])[0] };
+      case 9: {
+        // 相手から見て地雷っぽい（推理されやすい）安全なカードをおとりにする
+        const mr = solve(me), safe = hidden(me).filter(n => !isMine(me, n)).sort((a, b) => mr.prob[b] - mr.prob[a]);
+        return { type: "eff", n: safe[0] };
       }
     }
-  }
-  if (s.step === "place") {
-    const h = handOf(me);
-    const safe = h.filter(n => !isMine(me, n));
-    return { type: "place", n: rnd(safe.length ? safe : h) };
   }
 }
 
 // ---------- 画面状態 ----------
 let S = null;               // ゲーム状態
 let screen = "start";       // start | game
-let ui = {};                // 自分の操作中の選択（setupSel, mode, trumpA, eff4h）
+let ui = {};                // 自分の操作中の選択（setupSel, mode, trumpA, e3）
 let me = 0;                 // 自分の席番号（オンラインでは -1 = 観戦）
 let cpuTimer = null;
 let spinBusyUntil = 0, lastSpinId = null, wheelRot = 0;
@@ -580,7 +545,9 @@ const effPhase = s => s.phase === "setup" && bothReady(s) ? "play" : s.phase;
 // ---------- ログ表示（見る人ごとに秘密を隠す） ----------
 function fmt(e, v) {
   const W = nm(e.who, v);
-  const causeTxt = { penalty: "ペナルティで", e1: "効果1で", e8: "効果8で" };
+  const causeTxt = { penalty: "ペナルティで", e1: "ランダム公開で", e8: "指名で" };
+  // ヒント系：引いた本人／知られた側／観戦者で文面を変える
+  const told = (mine, theirs, other) => [e.who === v ? mine : v === 1 - e.who ? theirs : other];
   switch (e.k) {
     case "guessHit": return [`${W}の推理「${e.n}」→ 的中！`, "hit"];
     case "guessMiss": return [`${W}の推理「${e.n}」→ ハズレ`];
@@ -588,22 +555,20 @@ function fmt(e, v) {
       return [`${nm(e.owner, v)}の ${e.n} が${causeTxt[e.cause] || ""}公開${e.mine ? "（地雷！）" : ""}`, e.mine ? "hit" : ""];
     case "nopen": return [`${W}は公開できるカードがない`];
     case "spin": return [`${W}のルーレット → ${e.n}「${SHORT[e.n]}」`];
-    case "sum": return [e.who === v ? `${oppName()}の地雷の合計は ${e.s}` : v === 1 - e.who ? `あなたの地雷の合計（${e.s}）を知られた` : `${W}が合計ヒントを得た`];
+    case "sum": return told(`${oppName()}の地雷の合計は ${e.s}`, `あなたの地雷の合計（${e.s}）を知られた`, `${W}が合計ヒントを得た`);
+    case "cnt": return told(`${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚`, `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた`, `${W}が3枚質問をした`);
+    case "big": return told(`${oppName()}の地雷は${MBIG[e.ev]}`, `あなたの地雷の大小（${MBIG[e.ev]}）を知られた`, `${W}が大小ヒントを得た`);
+    case "mpar": return told(`${oppName()}の地雷は${MPAR[e.ev]}`, `あなたの地雷の偶奇（${MPAR[e.ev]}）を知られた`, `${W}が偶奇ヒントを得た`);
+    case "dist": return told(`${oppName()}の地雷のうち ${e.x} にいちばん近いものは差 ${e.d}`, `${e.x} からあなたの地雷までの差（${e.d}）を知られた`, `${W}が距離ヒントを得た`);
     case "none": return [`${W}: 対象のカードがなく効果なし`];
     case "skip": return [`${W}は効果を使わなかった`];
-    case "stop8": return [`${W}は指名をやめた`];
-    case "swap4": return [e.who === v ? `手札の ${e.h} と場の ${e.f} を入れ替えた` : `${W}が手札と場のカードを入れ替えた`];
-    case "loc": return [`${W}の質問「${e.n} はどこ？」→ ${e.z === "h" ? "手札" : e.z === "f" ? "場（裏向き）" : "公開済み"}`];
-    case "e8miss": return [`${W}の指名「${e.n}」→ 場になし`];
-    case "cnt": return [e.who === v ? `${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚` : v === 1 - e.who ? `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた` : `${W}が3枚質問をした`];
-    case "big": return [e.who === v ? `${oppName()}の地雷は${MBIG[e.ev]}` : v === 1 - e.who ? `あなたの地雷の大小（${MBIG[e.ev]}）を知られた` : `${W}が大小ヒントを得た`];
-    case "mpar": return [e.who === v ? `${oppName()}の地雷は${MPAR[e.ev]}` : v === 1 - e.who ? `あなたの地雷の偶奇（${MPAR[e.ev]}）を知られた` : `${W}が偶奇ヒントを得た`];
-    case "charm": return [`${W}がお守りを手に入れた`];
-    case "charmUsed": return [`${W}のお守りでペナルティを防いだ`];
-    case "take10": return [e.who === v ? `場の ${e.n} を手札に戻した` : `${W}が場のカードを1枚手札に戻した`];
+    case "shield": return [`${W}がシールドを張った`];
+    case "shieldBlock": return [`${nm(e.target, v)}のシールドがヒントを防いだ`];
+    case "decoy": return [e.who === v ? `おとりを ${e.n} に仕掛けた` : `${W}がおとりを仕掛けた`];
+    case "decoyHit": return [`${W}の推理「${e.n}」はおとりだった！ペナルティ2枚`, "hit"];
+    case "seal": return [`${nm(e.target, v)}は次の番、ルーレットを回せない`];
+    case "pass": return [`${W}はパスした`];
     case "trump": return [e.who === v ? `切り札：地雷を ${e.a} から ${e.b} に移した` : `${W}が切り札を使った（中身は秘密）`, "hit"];
-    case "place": return [(e.who === v ? `${e.n} を場に出した` : `${W}がカードを1枚場に出した`)];
-    case "nohand": return [`${W}の手札がなくなった`];
     case "win": return [e.who === v ? "あなたの勝ち！" : `${W}の勝ち`, "hit"];
   }
   return null;
@@ -677,7 +642,7 @@ function renderStart() {
       <div class="mode">
         <h3>CPUと対戦</h3>
         <p>1人で遊ぶモード。CPUも同じ推理アシストを使って、あなたの地雷を絞り込んできます。</p>
-        <div class="btns"><button class="btn" data-act="mode-cpu">新しく始める</button>${saved && saved.phase !== "over" ? `<button class="btn ghost" data-act="resume-cpu">続きから</button>` : ""}</div>
+        <div class="btns"><button class="btn" data-act="mode-cpu">新しく始める</button>${saved && saved.v === STATE_V && saved.phase !== "over" ? `<button class="btn ghost" data-act="resume-cpu">続きから</button>` : ""}</div>
       </div>
       <div class="mode">
         <h3>オンライン対戦</h3>
@@ -704,58 +669,44 @@ function renderGame() {
   const myTurn = phase === "play" && s.turn === me && !busy;
   const over = phase === "over";
 
-  // --- 相手席 ---
-  const oppField = fieldOf(op), oppHidden = hiddenField(op);
-  const pickOpp = myTurn && s.step === "effect" && s.pending?.eff === 1;
+  // --- 相手席：公開されたカードだけ数字が見える ---
   const oppCls = n => [op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), C(op, n).r ? "open" : ""].join(" ");
-  const oppFieldHTML = oppField.length ? oppField.map(n => {
-    const c = C(op, n);
-    if (c.r || over) return cardHTML(n, oppCls(n), "", "", c.r ? "公開" : "裏");
-    const idx = oppHidden.indexOf(n);
-    return pickOpp ? `<button class="card back pickable" data-act="opp-field" data-idx="${idx}" aria-label="裏向きのカード ${idx + 1}"></button>` : `<div class="card back"></div>`;
-  }).join("") : `<span class="empty">まだカードはありません</span>`;
-  const oppHand = handOf(op);
-  const oppHandHTML = oppHand.length ? oppHand.map(n => C(op, n).r || over ? cardHTML(n, oppCls(n), "", "", C(op, n).r ? "公開" : "手") : `<div class="card back"></div>`).join("") : `<span class="empty">手札なし</span>`;
+  const oppCardsHTML = NUMS.map(n => C(op, n).r || over ? cardHTML(n, oppCls(n), "", "", C(op, n).r ? "公開" : "") : `<div class="card back"></div>`).join("");
 
   const seatChips = (p, mine) => [
-    `<span class="chip">手札 ${handOf(p).length}</span>`,
     `<span class="chip ${p.found.length ? (mine ? "bad" : "on") : ""}">判明した地雷 ${p.found.length}/2</span>`,
     `<span class="chip ${p.trumpUsed ? "" : "on"}">切り札 ${p.trumpUsed ? "使用済み" : "あり"}</span>`,
-    p.charm ? `<span class="chip on">お守りあり</span>` : "",
+    p.shield ? `<span class="chip on">シールドあり</span>` : "",
+    p.decoy != null ? `<span class="chip on">${mine ? `おとり ${p.decoy}` : "おとりあり"}</span>` : "",
+    p.sealed && !over ? `<span class="chip bad">封印中</span>` : "",
   ].join("");
 
   // --- 自分席 ---
   const setupMode = phase === "setup" && me !== -1 && !mp.ready;
+  const pickSafe = n => !C(mp, n).r && !isMine(mp, n);
   const clickable = n => {
-    const c = C(mp, n);
     if (setupMode) return true;
     if (!myTurn) return false;
     if (ui.mode === "trumpA") return isMine(mp, n) && !mp.found.includes(n);
-    if (ui.mode === "trumpB") return c.z === "f" && !c.r && !isMine(mp, n);
-    if (s.step === "effect" && s.pending?.eff === 4) return ui.eff4h == null ? c.z === "h" : (c.z === "f" && !c.r);
-    if (s.step === "effect" && s.pending?.eff === 10) return c.z === "f" && !c.r;
-    if (s.step === "place") {
-      if (c.z !== "h") return false;
-      return true;
-    }
+    if (ui.mode === "trumpB") return pickSafe(n);
+    if (s.step === "effect" && s.pending?.eff === 9) return pickSafe(n);
     return false;
   };
-  const myCard = (n, zone) => {
+  const myCard = n => {
     const c = C(mp, n);
-    const sel = (setupMode && (ui.setupSel || []).includes(n)) || ui.trumpA === n || ui.eff4h === n;
+    const sel = (setupMode && (ui.setupSel || []).includes(n)) || ui.trumpA === n;
     let cls = [];
     if (mp.found.includes(n)) cls.push("found"); else if (isMine(mp, n) && !setupMode) cls.push("mine");
-    if (zone === "f" && !c.r) cls.push("veiled");
     if (c.r) cls.push("seen");
+    if (mp.decoy === n && me !== -1) cls.push("decoy");
     if (sel) cls.push("sel");
     const can = clickable(n);
     if (can && !setupMode) cls.push("pickable");
-    const anyPick = setupMode || (myTurn && (ui.mode || s.step === "place" || (s.step === "effect" && [4, 10].includes(s.pending?.eff))));
+    const anyPick = setupMode || (myTurn && (ui.mode || (s.step === "effect" && s.pending?.eff === 9)));
     if (anyPick && !can && !sel) cls.push("dim");
-    const tag = zone === "f" ? (c.r ? "公開" : "裏") : (c.r ? "公開" : "");
+    const tag = c.r ? "公開" : mp.decoy === n && me !== -1 ? "おとり" : "";
     return cardHTML(n, cls.join(" "), can ? "my-card" : "", `data-n="${n}"`, tag);
   };
-  const myField = fieldOf(mp), myHand = handOf(mp);
 
   // --- 操作パネル ---
   const panel = renderPanel(s, phase, busy, myTurn, over, op, mp);
@@ -790,12 +741,10 @@ function renderGame() {
   mine.className = "seat" + (phase === "play" && s.turn === mySeat ? " turn" : "");
   opp.innerHTML = `
         <div class="seat-head"><span class="seat-name">${me === -1 ? "P2" : esc(oppName())}</span>${seatChips(op, false)}</div>
-        <div class="zone"><span class="zone-label">場</span><div class="cards">${oppFieldHTML}</div></div>
-        <div class="zone"><span class="zone-label">手札</span><div class="cards">${oppHandHTML}</div></div>`;
+        <div class="cards">${oppCardsHTML}</div>`;
   mine.innerHTML = `
         <div class="seat-head"><span class="seat-name">${me === -1 ? "P1" : "あなた"}</span>${setupMode ? "" : seatChips(mp, me !== -1)}</div>
-        <div class="zone"><span class="zone-label">場</span><div class="cards">${myField.length ? myField.map(n => myCard(n, "f")).join("") : `<span class="empty">まだカードはありません</span>`}</div></div>
-        <div class="zone"><span class="zone-label">手札</span><div class="cards">${myHand.length ? myHand.map(n => myCard(n, "h")).join("") : `<span class="empty">手札なし</span>`}</div></div>`;
+        <div class="cards">${NUMS.map(myCard).join("")}</div>`;
   $("#panel").outerHTML = panel.replace('<div class="panel">', '<div class="panel" id="panel">');
   $("#fxlist").innerHTML = renderFx(s, busy);
   $("#assist").innerHTML = assist;
@@ -804,10 +753,10 @@ function renderGame() {
   if (busy) setTimeout(render, spinBusyUntil - Date.now() + 30);
 }
 
-function numpad(kind, op, r, sel = []) {
+function numpad(kind, op, r, sel = [], all = false) {
   return `<div class="numpad">${NUMS.map(n => {
-    const dis = C(op, n).r;
-    return `<button class="${sel.includes(n) ? "on" : ""}" data-act="pad" data-kind="${kind}" data-n="${n}" ${dis ? "disabled" : ""} aria-label="${n}"><b>${n}</b><span>${dis ? "公開" : pct(r.prob[n])}</span></button>`;
+    const dis = !all && C(op, n).r;
+    return `<button class="${sel.includes(n) ? "on" : ""}" data-act="pad" data-kind="${kind}" data-n="${n}" ${dis ? "disabled" : ""} aria-label="${n}"><b>${n}</b><span>${C(op, n).r ? "公開" : pct(r.prob[n])}</span></button>`;
   }).join("")}</div>`;
 }
 
@@ -819,7 +768,7 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
     if (me === -1) return wrap(`<div class="prompt">観戦中<small>この部屋は満席です。</small></div>`);
     if (!mp.ready) {
       const sel = ui.setupSel || [];
-      return wrap(`${waitJoin}<div class="prompt">地雷にするカードを<b>2枚</b>選んでください<small>あなたの手札から選びます。相手に2枚とも当てられたら負けです。（選択中: ${sel.length ? sel.join(" と ") : "なし"}）</small></div><div class="btns"><button class="btn" data-act="setup-ok" ${sel.length === 2 ? "" : "disabled"}>この2枚で決定</button><button class="btn quiet" data-act="setup-random">おまかせ</button></div>`);
+      return wrap(`${waitJoin}<div class="prompt">地雷にするカードを<b>2枚</b>選んでください<small>あなたのカードから選びます。相手に2枚とも当てられたら負けです。（選択中: ${sel.length ? sel.join(" と ") : "なし"}）</small></div><div class="btns"><button class="btn" data-act="setup-ok" ${sel.length === 2 ? "" : "disabled"}>この2枚で決定</button><button class="btn quiet" data-act="setup-random">おまかせ</button></div>`);
     }
     return wrap(waitJoin || `<div class="prompt">相手が地雷を選ぶのを待っています…<small>部屋コード ${esc(online.code || "")}</small></div>`);
   }
@@ -835,31 +784,27 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
   }
   const r = solve(op);
   if (s.step === "action") {
-    if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>${mp.charm ? "お守りがあるので、外してもペナルティはありません（お守りは消費します）。" : "外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。"}数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、場の裏向きカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>場の裏向きカード</b>を選んでください<small>相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    const canTrump = !mp.trumpUsed && mp.mines.some(m => !mp.found.includes(m)) && hiddenField(mp).some(n => !isMine(mp, n));
-    return wrap(`<div class="prompt">あなたの番です<small>推理かルーレットのどちらかを行い、そのあと手札から1枚を場に出します。</small></div>
-      <div class="btns"><button class="btn" data-act="guess-open">推理する</button><button class="btn ghost" data-act="spin">ルーレットを回す</button>${!mp.trumpUsed ? `<button class="btn quiet" data-act="trump-open" ${canTrump ? "" : "disabled"} title="${canTrump ? "" : "地雷ではない裏向きのカードが場にあると使えます"}">切り札（1回）</button>` : ""}</div>`);
+    const warn = op.decoy != null ? `${oppName()}はおとりを仕掛けています。おとりの数字を推理して外すとペナルティが2枚です。` : "";
+    if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。${warn}数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、公開されていない別のカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>カード</b>を選んでください<small>地雷ではない、公開されていないカードから選びます。相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    const canTrump = !mp.trumpUsed && mp.mines.some(m => !mp.found.includes(m)) && hidden(mp).some(n => !isMine(mp, n));
+    return wrap(`<div class="prompt">あなたの番です<small>${mp.sealed ? "封印されているので、この番は推理かパスだけです。" : "推理かルーレットのどちらかを行います。"}</small></div>
+      <div class="btns"><button class="btn" data-act="guess-open">推理する</button>${mp.sealed ? `<button class="btn ghost" data-act="pass">パス</button>` : `<button class="btn ghost" data-act="spin">ルーレットを回す</button>`}${!mp.trumpUsed ? `<button class="btn quiet" data-act="trump-open" ${canTrump ? "" : "disabled"} title="${canTrump ? "" : "地雷ではない、公開されていないカードがあると使えます"}">切り札（1回）</button>` : ""}</div>`);
   }
   if (s.step === "effect") {
     const e = s.pending.eff;
     const head = `<div class="effect-card"><div class="big">${e}</div><div class="prompt">${esc(EFFECTS[e])}</div></div>`;
     const skip = label => `<button class="btn quiet sm" data-act="eff-skip">${label}</button>`;
     switch (e) {
-      case 1: return wrap(`${head}<div class="prompt"><small>相手の場の裏向きカード（緑の枠）をクリックしてください。</small></div><div class="btns">${skip("使わない")}</div>`);
-      case 4: return wrap(`${head}<div class="prompt"><small>${ui.eff4h == null ? "まず手札から1枚選んでください。" : `手札の ${ui.eff4h} と入れ替える場の裏向きカードを選んでください。`}</small></div><div class="btns">${ui.eff4h != null ? `<button class="btn quiet sm" data-act="eff4-reset">選び直す</button>` : ""}${skip("使わない")}</div>`);
-      case 3: { const need = Math.min(3, NUMS.filter(n => !C(op, n).r).length), sel = ui.e3 || [];
+      case 3: { const need = Math.min(3, hidden(op).length), sel = ui.e3 || [];
         return wrap(`${head}<div class="prompt"><small>数字を ${need} つ選んでください（選択中: ${sel.join("・") || "なし"}）。</small></div>${numpad("e3", op, r, sel)}<div class="btns"><button class="btn sm" data-act="e3-ok" ${sel.length === need ? "" : "disabled"}>この${need}つで聞く</button>${skip("使わない")}</div>`); }
-      case 7: return wrap(`${head}${numpad("e7", op, r)}<div class="btns">${skip("使わない")}</div>`);
-      case 8: return wrap(`${head}<div class="prompt"><small>残り <b>${s.pending.left}</b> 回。相手の場に裏向きであれば表になります。</small></div>${numpad("e8", op, r)}<div class="btns">${skip(s.pending.left < 3 ? "ここでやめる" : "使わない")}</div>`);
-      case 10: return wrap(`${head}<div class="prompt"><small>手札に戻す場の裏向きカードを選んでください。</small></div><div class="btns">${skip("使わない")}</div>`);
+      case 7: return wrap(`${head}<div class="prompt"><small>公開済みの数字も指定できます。</small></div>${numpad("e7", op, r, [], true)}<div class="btns">${skip("使わない")}</div>`);
+      case 8: return wrap(`${head}${numpad("e8", op, r)}<div class="btns">${skip("使わない")}</div>`);
+      case 9: return wrap(`${head}<div class="prompt"><small>あなたのカードから、おとりにするカード（緑の枠）を選んでください。どれを選んだかは${oppName()}に伝わりません。</small></div><div class="btns">${skip("使わない")}</div>`);
     }
-    // 旧バージョンの保存データ（効果9の選択中など）で止まらないように
+    // 旧バージョンの保存データなどで止まらないように
     return wrap(`${head}<div class="btns">${skip("閉じる")}</div>`);
-  }
-  if (s.step === "place") {
-    return wrap(`<div class="prompt">手札から場に出すカードを1枚選んでください<small>地雷を場に出すと、効果でめくられる危険があります。</small></div>`);
   }
   return wrap("");
 }
@@ -889,9 +834,6 @@ function renderAssist(s, phase, op, mp, over) {
     else if (c.r) tags.push("公開・地雷ではない");
     else {
       if (op.facts.some(f => f.t === "not" && f.n === n)) tags.push("推理ハズレ");
-      const f = lastLocFact(op, n);
-      if (f && !f.old) tags.push({ h: "手札にある", f: "場にある", nf: "場にない" }[f.z] || "");
-      else if (f) tags.push(`T${f.at}時点で` + ({ h: "手札", f: "場", nf: "場になし" }[f.z] || ""));
     }
     const left = cell(r.prob[n], tags.join("・"), op.found.includes(n) ? "dead" : "");
     let right = "";
@@ -917,10 +859,10 @@ function renderAssist(s, phase, op, mp, over) {
     ${self ? `${myHints.length ? `<p class="note">${oppName()}が得たヒント：${myHints.join("／")}</p>` : ""}<div class="note">あなたの2枚をぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>` : ""}
   </section>`;
 }
-// p の地雷について公開されたヒント（効果2・3・5・6）を表示用の文字列にする
+// p の地雷について公開されたヒント（効果2・3・5・6・7）を表示用の文字列にする
 function hintList(p) {
-  return p.facts.filter(f => ["sum", "cnt", "par", "big"].includes(f.t)).map(f =>
-    (f.t === "sum" ? `合計 ${f.s}` : f.t === "cnt" ? `[${f.ns.join(",")}] に ${f.c} 枚` : f.t === "big" ? MBIG[f.ev] : MPAR[f.ev]) + (p.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
+  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => MBIG[f.ev], par: f => MPAR[f.ev], dist: f => `${f.x} から差 ${f.d}` };
+  return p.facts.filter(f => txt[f.t]).map(f => txt[f.t](f) + (p.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
 }
 
 // ---------- 進行 ----------
@@ -944,7 +886,7 @@ function scheduleCpu() {
   cpuTimer = setTimeout(() => {
     if (!S || S.mode !== "cpu" || S.turn !== 1 || effPhase(S) !== "play") return;
     try { commit(act(S, 1, cpuDecide(S))); }
-    catch (e) { console.error(e); const fallback = S.step === "effect" ? { type: "eff", skip: true } : S.step === "place" ? { type: "place", n: handOf(S.p1)[0] } : { type: "spin" }; commit(act(S, 1, fallback)); }
+    catch (e) { console.error(e); const fallback = S.step === "effect" ? { type: "eff", skip: true } : S.p1.sealed ? { type: "pass" } : { type: "spin" }; commit(act(S, 1, fallback)); }
   }, wait);
 }
 function startCpu() {
@@ -987,6 +929,7 @@ function subscribe(code) {
   online.unsub = online.ref.onSnapshot(snap => {
     if (!snap.exists) return;
     const data = clone(snap.data());
+    if (data.v !== STATE_V) { toast("この部屋は古いルール（場のある版）のものです。新しく部屋を作ってください。"); leaveOnline(); screen = "start"; S = null; return render(); }
     if (data.phase === "setup" && bothReady(data)) data.phase = "play";
     const prevMe = me; S = data; me = seatOf(S);
     if (prevMe !== me) ui = {};
@@ -1015,6 +958,7 @@ async function joinRoom(code) {
   try { snap = await ref.get(); } catch (e) { return toast("部屋を読み込めませんでした"); }
   if (!snap.exists) return toast(`部屋 ${code} は見つかりませんでした`);
   const d = snap.data();
+  if (d.v !== STATE_V) return toast("この部屋は古いルール（場のある版）のものです。新しく部屋を作ってください。");
   online.ref = ref; online.code = code; lastSpinId = null;
   if (d.p0.uid !== online.uid && d.p1.uid !== online.uid && !d.p1.uid) {
     await write(() => ref.update({ p1: { uid: online.uid } }));
@@ -1045,20 +989,21 @@ function renderRules() {
   $("#rules").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="ルール">
     <h2>ルール</h2>
     <h3>準備</h3>
-    <ul><li>2人とも 1〜10 のカード10枚を手札に持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li></ul>
+    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li></ul>
     <h3>自分の番</h3>
-    <ol><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li><li>そのあと手札から1枚を裏向きで場に出します（手札がなければ出しません）。</li></ol>
-    <ul><li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
+    <ul><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li>
+    <li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
     <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li>
     <li>表になったカードは光ります。金色は相手の公開済みカード、赤色は相手に見えている自分のカードです。</li></ul>
     <h3>ルーレットの効果</h3>
-    <ul><li>2・5・6・9 はすぐに自動で発動します。それ以外（1・3・4・7・8・10）は「使わない」を選んで見送ることもできます。</li><li>9 のお守りは1つまでで、推理を外したときに自動で使われます（効果8の外れには効きません）。</li></ul>
+    <ul><li>1・2・4・5・6・10 はすぐに自動で発動します。3・7・8・9 は「使わない」を選んで見送ることもできます。</li>
+    <li>シールド（4）とおとり（9）は1つずつまで持てます。おとりを仕掛け直すと前のおとりは消え、おとりのカードが公開されたときも消えます。</li>
+    <li>封印（10）された人は、次の番ルーレットを回せず、推理かパスだけになります。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
     <h3>切り札（1ゲーム1回）</h3>
-    <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない場の裏向きカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
+    <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない公開されていないカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
     <h3>推理アシスト</h3>
-    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・5・6のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
-    <p>効果7・8でわかったカードの位置（手札にある／場にある／場にない）も表示します。相手がカードを出したり効果4・10で動かしたりして位置が変わった可能性があるときは、「T5時点で手札」のように、いつの情報かを添えて表示します。</p>
+    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・5・6・7のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
     <div class="btns"><button class="btn" data-act="close-rules">閉じる</button></div>
   </div>`;
   $("#rules").hidden = false;
@@ -1074,7 +1019,7 @@ document.addEventListener("click", ev => {
     case "close-rules": $("#rules").hidden = true; return;
     case "home": clearTimeout(cpuTimer); $("#splash").hidden = true; leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
     case "mode-cpu": return startCpu();
-    case "resume-cpu": { const g = load("lc_game"); if (!g) return startCpu(); leaveOnline(); S = g; me = 0; ui = {}; screen = "game"; lastSpinId = null; render(); return scheduleCpu(); }
+    case "resume-cpu": { const g = load("lc_game"); if (!g || g.v !== STATE_V) return startCpu(); leaveOnline(); S = g; me = 0; ui = {}; screen = "game"; lastSpinId = null; render(); return scheduleCpu(); }
     case "online-create": return createRoom();
     case "online-join": return joinRoom($("#joinCode").value);
     case "copy-code": {
@@ -1088,6 +1033,7 @@ document.addEventListener("click", ev => {
     case "trump-open": ui = { mode: "trumpA" }; return render();
     case "cancel": ui = {}; return render();
     case "spin": return doAct({ type: "spin" });
+    case "pass": return doAct({ type: "pass" });
     case "pad": {
       const kind = el.dataset.kind;
       if (kind === "guess") return doAct({ type: "guess", n });
@@ -1098,10 +1044,8 @@ document.addEventListener("click", ev => {
       }
       return doAct({ type: "eff", n });
     }
-    case "opp-field": return doAct({ type: "eff", idx: Number(el.dataset.idx) });
     case "eff-skip": return doAct({ type: "eff", skip: true });
     case "e3-ok": return doAct({ type: "eff", ns: ui.e3 || [] });
-    case "eff4-reset": ui.eff4h = null; return render();
     case "again": {
       if (S.mode === "cpu") return startCpu();
       const s = newGame("online", S.p0.uid, S.p1.uid);
@@ -1117,12 +1061,7 @@ document.addEventListener("click", ev => {
       }
       if (ui.mode === "trumpA") { ui = { mode: "trumpB", trumpA: n }; return render(); }
       if (ui.mode === "trumpB") return doAct({ type: "trump", a: ui.trumpA, b: n });
-      if (s.step === "effect" && s.pending?.eff === 4) {
-        if (ui.eff4h == null) { ui.eff4h = n; return render(); }
-        return doAct({ type: "eff", h: ui.eff4h, f: n });
-      }
-      if (s.step === "effect" && s.pending?.eff === 10) return doAct({ type: "eff", f: n });
-      if (s.step === "place") return doAct({ type: "place", n });
+      if (s.step === "effect" && s.pending?.eff === 9) return doAct({ type: "eff", n });
       return;
     }
   }
@@ -1139,7 +1078,7 @@ document.addEventListener("keydown", ev => {
 
 // ---------- 起動 ----------
 function start(data) {
-  if (data && data.S && data.S.mode === "cpu" && data.screen === "game") {
+  if (data && data.S && data.S.v === STATE_V && data.S.mode === "cpu" && data.screen === "game") {
     S = data.S; me = 0; ui = {}; screen = "game";
   }
   render();
