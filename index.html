@@ -145,6 +145,7 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 
 /* side */
 .side { display: grid; gap: 16px; min-width: 0; }
+#assist { display: grid; gap: 16px; min-width: 0; }
 .box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
 .box h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 17px; letter-spacing: .1em; color: var(--brass); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .box h2 small { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: 0; }
@@ -159,6 +160,8 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .prow.zero .n, .prow.zero .pct { opacity: .35; }
 .prow.hot .pct { color: var(--brass); }
 .prow.dead .n { color: var(--danger); }
+.prow.mine .n { color: var(--brass); }
+.prow.mine .bar i { background: linear-gradient(90deg, #8a3a32, var(--danger)); }
 .combos { display: flex; flex-wrap: wrap; gap: 6px; }
 .combo { font-family: var(--f-mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); background: rgba(255,255,255,.03); }
 .combo b { font-family: var(--f-num); font-size: 14px; color: var(--ivory); }
@@ -200,6 +203,20 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ivory); color: var(--ink); padding: 8px 16px; border-radius: 8px; font-weight: 500; z-index: 30; box-shadow: 0 8px 20px rgba(0,0,0,.4); max-width: calc(100% - 32px); }
 .result { font-family: var(--f-display); font-size: 30px; letter-spacing: .06em; color: var(--brass); }
 .result.lose { color: var(--muted); }
+
+/* 効果一覧（サイドの最上部）と、ルーレットが止まったときの大きな表示 */
+.fxgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.fxgrid .fx { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; min-width: 0; }
+.fxgrid .fx b { font-family: var(--f-num); color: var(--brass); font-size: 15px; min-width: 18px; text-align: right; }
+.fxgrid .fx.now { border-color: var(--brass); background: rgba(214,173,87,.18); }
+.note b { font-family: var(--f-num); color: var(--brass); }
+.splash { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 25; width: min(360px, calc(100% - 32px)); background: var(--panel); border: 2px solid var(--brass); border-radius: 18px; padding: 18px 24px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 30px rgba(214,173,87,.35); pointer-events: none; animation: pop .25s ease-out; }
+.splash .who { color: var(--muted); font-size: 13px; }
+.splash .num { font-family: var(--f-num); font-weight: 800; font-size: 64px; line-height: 1.05; color: var(--brass); }
+.splash .name { font-size: 20px; font-weight: 700; color: var(--ivory); }
+.splash .desc { font-size: 13px; margin-top: 4px; }
+@keyframes pop { from { opacity: 0; transform: translate(-50%, -50%) scale(.85); } }
+@media (prefers-reduced-motion: reduce) { .splash { animation: none; } }
 </style>
 
 <div class="app">
@@ -211,6 +228,7 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 </div>
 <div class="overlay" id="rules" hidden></div>
 <div class="toast" id="toast" hidden></div>
+<div class="splash" id="splash" hidden></div>
 
 <script>
 "use strict";
@@ -594,7 +612,7 @@ function syncWheel(animate) {
     const target = (360 - ((S.spin.n - 1) * 36 + 18)) % 360;
     const cur = ((wheelRot % 360) + 360) % 360;
     wheelRot += (animate ? 360 * 4 : 0) + ((target - cur + 360) % 360);
-    if (animate) spinBusyUntil = Date.now() + 1750;
+    if (animate) { spinBusyUntil = Date.now() + 1750; const sp = S.spin; setTimeout(() => showSplash(sp), 1750); }
     lastSpinId = S.spin.id;
   }
   if (disc.dataset.rot === String(wheelRot)) return;
@@ -604,6 +622,16 @@ function syncWheel(animate) {
   disc.style.transform = `rotate(${wheelRot}deg)`;
   void disc.getBoundingClientRect();
   disc.style.transition = "";
+}
+
+let splashTimer;
+function showSplash(sp) {
+  if (screen !== "game" || !S) return;
+  const el = $("#splash");
+  el.innerHTML = `<div class="who">${esc(nm(sp.who, me))}のルーレット</div><div class="num">${sp.n}</div><div class="name">${esc(SHORT[sp.n])}</div><div class="desc">${esc(EFFECTS[sp.n])}</div>`;
+  el.hidden = false;
+  clearTimeout(splashTimer);
+  splashTimer = setTimeout(() => el.hidden = true, 2400);
 }
 
 // ---------- 描画 ----------
@@ -736,6 +764,7 @@ function renderGame() {
       <div class="seat" id="mySeat"></div>
     </section>
     <aside class="side">
+      <div id="fxlist"></div>
       <div id="assist"></div>
       <section class="box"><h2>記録</h2><div class="log" id="log"></div></section>
     </aside>
@@ -753,6 +782,7 @@ function renderGame() {
         <div class="zone"><span class="zone-label">場</span><div class="cards">${myField.length ? myField.map(n => myCard(n, "f")).join("") : `<span class="empty">まだカードはありません</span>`}</div></div>
         <div class="zone"><span class="zone-label">手札</span><div class="cards">${myHand.length ? myHand.map(n => myCard(n, "h")).join("") : `<span class="empty">手札なし</span>`}</div></div>`;
   $("#panel").outerHTML = panel.replace('<div class="panel">', '<div class="panel" id="panel">');
+  $("#fxlist").innerHTML = renderFx(s, busy);
   $("#assist").innerHTML = assist;
   $("#log").innerHTML = logHTML;
   syncWheel(false);
@@ -819,6 +849,15 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
   return wrap("");
 }
 
+// 回転中は結果を先に見せないよう、止まってから直前の目を光らせる
+function renderFx(s, busy) {
+  const sp = !busy && s.spin ? s.spin : null;
+  return `<section class="box"><h2>ルーレットの効果</h2>
+    <div class="fxgrid">${NUMS.map(n => `<div class="fx ${sp && sp.n === n ? "now" : ""}" title="${esc(EFFECTS[n])}"><b>${n}</b>${esc(SHORT[n])}</div>`).join("")}</div>
+    ${sp ? `<p class="note"><b>${sp.n}</b>（${esc(nm(sp.who, me))}が直前に出した）${esc(EFFECTS[sp.n])}</p>` : ""}
+  </section>`;
+}
+
 function renderAssist(s, phase, op, mp, over) {
   if (phase === "setup") return `<section class="box"><h2>推理アシスト</h2><p class="note">ゲームが始まると、${oppName()}の地雷としてあり得る組み合わせ（最初は 45 通り）を、公開された情報から毎ターン数え直して表示します。</p></section>`;
   const r = solve(op);
@@ -837,22 +876,38 @@ function renderAssist(s, phase, op, mp, over) {
     const cls = op.found.includes(n) ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "";
     return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tags.join("・"))}</em></span><span class="pct">${pct(p)}</span></div>`;
   }).join("");
-  const hints = op.facts.filter(f => ["sum", "cnt", "par", "big"].includes(f.t)).map(f =>
-    (f.t === "sum" ? `合計 ${f.s}` : f.t === "cnt" ? `[${f.ns.join(",")}] に ${f.c} 枚` : f.t === "big" ? MBIG[f.ev] : MPAR[f.ev]) + (op.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
-  // 自分の地雷がどれだけ読まれているか
+  const hints = hintList(op);
+  // 自分の地雷がどれだけ読まれているか：相手の推理アシストに映っているのと同じ計算
   let exposure = "";
   if (me !== -1) {
     const mr = solve(mp), key = [...mp.mines].sort((a, b) => a - b).join("-");
     const ex = mr.total ? (mr.map.get(key) || 0) / mr.total : 0;
-    exposure = `<div class="note">${oppName()}から見たあなたの地雷：候補 ${mr.count} 通り、2枚の組み合わせをぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>`;
+    const myRows = NUMS.map(n => {
+      const p = mr.prob[n], found = mp.found.includes(n), mine = isMine(mp, n) && !found;
+      const tag = found ? "地雷（判明）" : mine ? "あなたの地雷" : C(mp, n).r ? "公開済み" : "";
+      const cls = [found ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "", mine ? "mine" : ""].join(" ");
+      return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${tag}</em></span><span class="pct">${pct(p)}</span></div>`;
+    }).join("");
+    const myHints = hintList(mp);
+    exposure = `<section class="box">
+    <h2>${oppName()}から見たあなた <small>候補 ${mr.count} / 45 通り</small></h2>
+    <div class="prob">${myRows}</div>
+    ${myHints.length ? `<p class="note">${oppName()}が得たヒント：${myHints.join("／")}</p>` : ""}
+    <div class="note">2枚の組み合わせをぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>
+  </section>`;
   }
   return `<section class="box">
     <h2>推理アシスト <small>候補 ${r.count} / 45 通り</small></h2>
     <div class="prob">${rows}</div>
     <div class="combos">${top.map((c, i) => `<span class="combo ${i === 0 && r.count > 1 ? "top" : ""}"><b>${c.pair[0]}・${c.pair[1]}</b> ${pct(c.pr)}</span>`).join("")}${r.count > top.length ? `<span class="combo">ほか ${r.count - top.length} 通り</span>` : ""}</div>
     <p class="note">公開カード・推理のハズレ・判明した地雷${hints.length ? `・ヒント（${hints.join("／")}）` : ""}と矛盾しない組み合わせを全列挙しています。${op.trumpUsed ? `<br>${oppName()}は切り札を使用済み：入れ替え前の候補 × 移し先の全パターンを合成して計算しています。` : ""}</p>
-    ${exposure}
-  </section>`;
+  </section>
+  ${exposure}`;
+}
+// p の地雷について公開されたヒント（効果2・3・5・6）を表示用の文字列にする
+function hintList(p) {
+  return p.facts.filter(f => ["sum", "cnt", "par", "big"].includes(f.t)).map(f =>
+    (f.t === "sum" ? `合計 ${f.s}` : f.t === "cnt" ? `[${f.ns.join(",")}] に ${f.c} 枚` : f.t === "big" ? MBIG[f.ev] : MPAR[f.ev]) + (p.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
 }
 
 // ---------- 進行 ----------
@@ -1004,7 +1059,7 @@ document.addEventListener("click", ev => {
   switch (a) {
     case "rules": return renderRules();
     case "close-rules": $("#rules").hidden = true; return;
-    case "home": clearTimeout(cpuTimer); leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
+    case "home": clearTimeout(cpuTimer); $("#splash").hidden = true; leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
     case "mode-cpu": return startCpu();
     case "resume-cpu": { const g = load("lc_game"); if (!g) return startCpu(); leaveOnline(); S = g; me = 0; ui = {}; screen = "game"; lastSpinId = null; render(); return scheduleCpu(); }
     case "online-create": return createRoom();
