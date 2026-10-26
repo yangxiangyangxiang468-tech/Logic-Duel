@@ -145,30 +145,39 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 
 /* side */
 .side { display: grid; gap: 16px; min-width: 0; }
-#assist { display: grid; gap: 16px; min-width: 0; }
+/* 広い画面ではサイドを画面の高さに収め、残りの高さを記録に使う（記録の中だけスクロール） */
+@media (min-width: 921px) {
+  .side { position: sticky; top: 16px; max-height: calc(100vh - 32px); grid-template-rows: auto auto minmax(0, 1fr); overflow-y: auto; }
+  .logbox { min-height: 140px; grid-template-rows: auto minmax(0, 1fr); }
+  .logbox .log { max-height: none; }
+}
 .box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
 .box h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 17px; letter-spacing: .1em; color: var(--brass); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .box h2 small { font-family: var(--f-mono); font-size: 12px; color: var(--muted); letter-spacing: 0; }
 .note { color: var(--muted); font-size: 12.5px; }
-.prob { display: grid; gap: 4px; }
-.prow { display: grid; grid-template-columns: 26px minmax(0, 1fr) 44px; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
-.prow .n { font-family: var(--f-num); font-weight: 800; font-size: 18px; text-align: center; }
+/* 推理アシスト：左 = 相手の地雷の確率、右 = 相手から見た自分の確率 */
+.prob2 { display: grid; gap: 3px; }
+.prow2 { display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(0, 1fr); gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
+.prob2.one .prow2 { grid-template-columns: 22px minmax(0, 1fr); }
+.prow2.head { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.prow2.head small { font-family: var(--f-mono); }
+.prow2 .n { font-family: var(--f-num); font-weight: 800; font-size: 16px; text-align: center; }
 .bar { position: relative; height: 18px; border-radius: 4px; background: rgba(255,255,255,.05); overflow: hidden; }
 .bar i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--brass-dim), var(--brass)); border-radius: 4px; }
 .bar em { position: absolute; left: 6px; top: 0; font-style: normal; font-size: 10.5px; line-height: 18px; color: var(--text); letter-spacing: .03em; white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
-.prow .pct { font-family: var(--f-mono); font-size: 12px; text-align: right; color: var(--muted); }
-.prow.zero .n, .prow.zero .pct { opacity: .35; }
-.prow.hot .pct { color: var(--brass); }
-.prow.dead .n { color: var(--danger); }
-.prow.mine .n { color: var(--brass); }
-.prow.mine .bar i { background: linear-gradient(90deg, #8a3a32, var(--danger)); }
+.bar .pv { position: absolute; right: 5px; top: 0; font-family: var(--f-mono); font-size: 11px; font-weight: 400; line-height: 18px; color: var(--muted); text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+.cell { min-width: 0; }
+.cell.zero .bar { opacity: .35; }
+.cell.hot .pv { color: var(--brass); }
+.cell.dead .bar i { background: var(--danger); }
+.cell.mine .bar i { background: linear-gradient(90deg, #8a3a32, var(--danger)); }
 .combos { display: flex; flex-wrap: wrap; gap: 6px; }
 .combo { font-family: var(--f-mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); background: rgba(255,255,255,.03); }
 .combo b { font-family: var(--f-num); font-size: 14px; color: var(--ivory); }
 .combo.top { border-color: var(--brass); }
 .meter { height: 6px; border-radius: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--danger); }
-.log { max-height: 280px; overflow-y: auto; display: grid; gap: 2px; font-size: 13px; padding-right: 4px; }
+.log { max-height: 280px; overflow-y: auto; display: grid; align-content: start; gap: 2px; font-size: 13px; padding-right: 4px; }
 .log div { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 6px; }
 .log .t { font-family: var(--f-mono); font-size: 11px; color: var(--muted); padding-top: 2px; }
 .log .me { color: var(--ivory); }
@@ -766,7 +775,7 @@ function renderGame() {
     <aside class="side">
       <div id="fxlist"></div>
       <div id="assist"></div>
-      <section class="box"><h2>記録</h2><div class="log" id="log"></div></section>
+      <section class="box logbox"><h2>記録</h2><div class="log" id="log"></div></section>
     </aside>
   </div>`;
   }
@@ -860,11 +869,11 @@ function renderFx(s, busy) {
 
 function renderAssist(s, phase, op, mp, over) {
   if (phase === "setup") return `<section class="box"><h2>推理アシスト</h2><p class="note">ゲームが始まると、${oppName()}の地雷としてあり得る組み合わせ（最初は 45 通り）を、公開された情報から毎ターン数え直して表示します。</p></section>`;
-  const r = solve(op);
-  const top = r.list.slice(0, 12);
+  // 右列は「相手の推理アシストに映っているのと同じ計算」で、自分の地雷がどれだけ読まれているか
+  const r = solve(op), self = me !== -1, mr = self ? solve(mp) : null;
+  const cell = (p, tag, cls) => `<span class="cell ${cls} ${p <= 0 ? "zero" : p >= 0.4 ? "hot" : ""}" title="${esc(tag)}"><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tag)}</em><b class="pv">${pct(p)}</b></span></span>`;
   const rows = NUMS.map(n => {
-    const c = C(op, n), p = r.prob[n];
-    const tags = [];
+    const c = C(op, n), tags = [];
     if (op.found.includes(n)) tags.push("地雷（判明）");
     else if (c.r) tags.push("公開・地雷ではない");
     else {
@@ -873,36 +882,29 @@ function renderAssist(s, phase, op, mp, over) {
       if (f && !f.old) tags.push({ h: "手札にある", f: "場にある", nf: "場にない" }[f.z] || "");
       else if (f) tags.push(`T${f.at}時点で` + ({ h: "手札", f: "場", nf: "場になし" }[f.z] || ""));
     }
-    const cls = op.found.includes(n) ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "";
-    return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tags.join("・"))}</em></span><span class="pct">${pct(p)}</span></div>`;
+    const left = cell(r.prob[n], tags.join("・"), op.found.includes(n) ? "dead" : "");
+    let right = "";
+    if (self) {
+      const found = mp.found.includes(n), mine = isMine(mp, n) && !found;
+      right = cell(mr.prob[n], found ? "地雷（判明）" : mine ? "あなたの地雷" : C(mp, n).r ? "公開済み" : "", found ? "dead" : mine ? "mine" : "");
+    }
+    return `<div class="prow2"><span class="n">${n}</span>${left}${right}</div>`;
   }).join("");
-  const hints = hintList(op);
-  // 自分の地雷がどれだけ読まれているか：相手の推理アシストに映っているのと同じ計算
-  let exposure = "";
-  if (me !== -1) {
-    const mr = solve(mp), key = [...mp.mines].sort((a, b) => a - b).join("-");
-    const ex = mr.total ? (mr.map.get(key) || 0) / mr.total : 0;
-    const myRows = NUMS.map(n => {
-      const p = mr.prob[n], found = mp.found.includes(n), mine = isMine(mp, n) && !found;
-      const tag = found ? "地雷（判明）" : mine ? "あなたの地雷" : C(mp, n).r ? "公開済み" : "";
-      const cls = [found ? "dead" : p <= 0 ? "zero" : p >= 0.4 ? "hot" : "", mine ? "mine" : ""].join(" ");
-      return `<div class="prow ${cls}"><span class="n">${n}</span><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${tag}</em></span><span class="pct">${pct(p)}</span></div>`;
-    }).join("");
-    const myHints = hintList(mp);
-    exposure = `<section class="box">
-    <h2>${oppName()}から見たあなた <small>候補 ${mr.count} / 45 通り</small></h2>
-    <div class="prob">${myRows}</div>
-    ${myHints.length ? `<p class="note">${oppName()}が得たヒント：${myHints.join("／")}</p>` : ""}
-    <div class="note">2枚の組み合わせをぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>
-  </section>`;
-  }
+  const top = r.list.slice(0, 6);
+  const hints = hintList(op), myHints = self ? hintList(mp) : [];
+  let ex = 0;
+  if (self) { const key = [...mp.mines].sort((a, b) => a - b).join("-"); ex = mr.total ? (mr.map.get(key) || 0) / mr.total : 0; }
   return `<section class="box">
-    <h2>推理アシスト <small>候補 ${r.count} / 45 通り</small></h2>
-    <div class="prob">${rows}</div>
+    <h2>推理アシスト</h2>
+    <div class="prob2 ${self ? "" : "one"}">
+      <div class="prow2 head"><span></span><span>${oppName()}の地雷 <small>候補 ${r.count}</small></span>${self ? `<span>あなた（${oppName()}から見て） <small>候補 ${mr.count}</small></span>` : ""}</div>
+      ${rows}
+    </div>
     <div class="combos">${top.map((c, i) => `<span class="combo ${i === 0 && r.count > 1 ? "top" : ""}"><b>${c.pair[0]}・${c.pair[1]}</b> ${pct(c.pr)}</span>`).join("")}${r.count > top.length ? `<span class="combo">ほか ${r.count - top.length} 通り</span>` : ""}</div>
-    <p class="note">公開カード・推理のハズレ・判明した地雷${hints.length ? `・ヒント（${hints.join("／")}）` : ""}と矛盾しない組み合わせを全列挙しています。${op.trumpUsed ? `<br>${oppName()}は切り札を使用済み：入れ替え前の候補 × 移し先の全パターンを合成して計算しています。` : ""}</p>
-  </section>
-  ${exposure}`;
+    ${hints.length ? `<p class="note">${oppName()}の地雷のヒント：${hints.join("／")}</p>` : ""}
+    ${op.trumpUsed ? `<p class="note">${oppName()}は切り札を使用済み（入れ替え前後の全パターンを合成して計算）</p>` : ""}
+    ${self ? `${myHints.length ? `<p class="note">${oppName()}が得たヒント：${myHints.join("／")}</p>` : ""}<div class="note">あなたの2枚をぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>` : ""}
+  </section>`;
 }
 // p の地雷について公開されたヒント（効果2・3・5・6）を表示用の文字列にする
 function hintList(p) {
