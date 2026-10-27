@@ -248,7 +248,7 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 // ---------- 定数 ----------
 const NUMS = [1,2,3,4,5,6,7,8,9,10];
 const EFFECTS = {
-  1: "相手の公開されていないカードを1枚ランダムに公開する（地雷なら判明）",
+  1: "相手の公開されていないカードを2枚ランダムに公開する（地雷なら判明）",
   2: "相手の地雷2枚の合計値がわかる",
   3: "数字を3つ指定し、その中に相手の地雷が何枚あるか聞く",
   4: "シールド：相手が次にあなたのヒント（2・3・5・6・7）を得るのを1回防ぐ",
@@ -259,12 +259,12 @@ const EFFECTS = {
   9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ。相手がその数字を推理して外したらペナルティが2枚になる",
   10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
 };
-const SHORT = {1:"ランダム公開",2:"合計ヒント",3:"3枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
+const SHORT = {1:"2枚公開",2:"合計ヒント",3:"3枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
 const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
-const STATE_V = 2; // 場のあった旧ルール（v1）の保存データは読み込まない
+const STATE_V = 3; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし）の保存データは読み込まない
 
 // ---------- ゲームエンジン（純粋関数） ----------
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -303,11 +303,17 @@ function reveal(s, owner, n, cause) {
     addLog(s, { k: "reveal", owner, n, mine: false, cause });
   }
 }
-function penalty(s, who) {
+function penalty(s, who, cause = "penalty") {
   const p = P(s, who);
   const pool = NUMS.filter(n => !C(p, n).r && !isMine(p, n));
   if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
-  reveal(s, who, rnd(pool), "penalty");
+  reveal(s, who, rnd(pool), cause);
+}
+// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを1枚公開する（CPU同士の対戦で先攻勝率 56% → 52%）。
+// オンラインでは両者の準備完了を別々のクライアントが書くので、先攻の最初の操作（act）で一度だけ行う
+function startPlay(s) {
+  s.phase = "play";
+  if (!s.handicap) { s.handicap = true; penalty(s, 0, "handicap"); }
 }
 // 封印は「封印された人の次の番」だけ効くので、その人の番が終わるときに解く
 function endTurn(s) {
@@ -321,7 +327,11 @@ function startEffect(s, who, n) {
   const pend = () => { s.step = "effect"; s.pending = { eff: n }; };
   if (HINT_EFFECTS.includes(n) && op.shield) { op.shield = false; addLog(s, { k: "shieldBlock", who, target: 1 - who }); return endTurn(s); }
   switch (n) {
-    case 1: { const h = hidden(op); if (!h.length) { addLog(s, { k: "none", who }); return endTurn(s); } reveal(s, 1 - who, rnd(h), "e1"); return endTurn(s); }
+    case 1: {
+      if (!hidden(op).length) { addLog(s, { k: "none", who }); return endTurn(s); }
+      for (let i = 0; i < 2 && s.phase === "play" && hidden(op).length; i++) reveal(s, 1 - who, rnd(hidden(op)), "e1");
+      return endTurn(s);
+    }
     case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return endTurn(s); }
     case 4: me.shield = true; addLog(s, { k: "shield", who }); return endTurn(s);
     case 5: { const ev = op.mines.filter(m => m >= 6).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return endTurn(s); }
@@ -364,7 +374,7 @@ function resolveEffect(s, who, a) {
 
 function act(s0, who, a) {
   const s = clone(s0);
-  if (s.phase === "setup" && bothReady(s)) s.phase = "play";
+  if (s.phase === "setup" && bothReady(s)) startPlay(s);
   if (s.phase !== "play") fail("ゲームは進行中ではありません");
   if (s.turn !== who) fail("相手の番です");
   const me = P(s, who), op = P(s, 1 - who);
@@ -389,6 +399,7 @@ function act(s0, who, a) {
       else {
         op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n });
         if (op.decoy === n) { op.decoy = null; addLog(s, { k: "decoyHit", who, n }); penalty(s, who); }
+        C(op, n).r = true; // 外れた数字は地雷ではないと確定するので表にする
         penalty(s, who);
       }
       endTurn(s);
@@ -545,7 +556,7 @@ const effPhase = s => s.phase === "setup" && bothReady(s) ? "play" : s.phase;
 // ---------- ログ表示（見る人ごとに秘密を隠す） ----------
 function fmt(e, v) {
   const W = nm(e.who, v);
-  const causeTxt = { penalty: "ペナルティで", e1: "ランダム公開で", e8: "指名で" };
+  const causeTxt = { penalty: "ペナルティで", e1: "2枚公開で", e8: "指名で", handicap: "先攻ハンデで" };
   // ヒント系：引いた本人／知られた側／観戦者で文面を変える
   const told = (mine, theirs, other) => [e.who === v ? mine : v === 1 - e.who ? theirs : other];
   switch (e.k) {
@@ -899,7 +910,7 @@ function confirmSetup(sel) {
     const s = clone(S);
     s.p0.mines = sel; s.p0.ready = true;
     const two = [...NUMS].sort(() => Math.random() - .5).slice(0, 2).sort((a, b) => a - b);
-    s.p1.mines = two; s.p1.ready = true; s.phase = "play";
+    s.p1.mines = two; s.p1.ready = true; startPlay(s);
     commit(s);
   } else {
     const key = "p" + me;
@@ -989,10 +1000,11 @@ function renderRules() {
   $("#rules").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="ルール">
     <h2>ルール</h2>
     <h3>準備</h3>
-    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li></ul>
+    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li><li>先攻のほうが有利になりやすいため、対戦開始時に先攻の地雷以外のカードが1枚ランダムに公開されます（先攻ハンデ）。</li></ul>
     <h3>自分の番</h3>
     <ul><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li>
     <li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
+    <li>推理で外れた数字は地雷ではないと確定するので、相手のそのカードは表になります。</li>
     <li>効果やペナルティで地雷が表になった場合も「判明」です。相手の地雷を先に2枚とも判明させたほうの勝ち。</li>
     <li>表になったカードは光ります。金色は相手の公開済みカード、赤色は相手に見えている自分のカードです。</li></ul>
     <h3>ルーレットの効果</h3>
