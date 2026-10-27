@@ -248,7 +248,7 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 // ---------- 定数 ----------
 const NUMS = [1,2,3,4,5,6,7,8,9,10];
 const EFFECTS = {
-  1: "相手の公開されていないカードを2枚ランダムに公開する（地雷なら判明）",
+  1: "相手の公開されていないカードを1枚ランダムに公開する（地雷なら判明）",
   2: "相手の地雷2枚の合計値がわかる",
   3: "数字を3つ指定し、その中に相手の地雷が何枚あるか聞く",
   4: "シールド：相手が次にあなたのヒント（2・3・5・6・7）を得るのを1回防ぐ",
@@ -259,7 +259,7 @@ const EFFECTS = {
   9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ。相手がその数字を推理して外したらペナルティが2枚になる",
   10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
 };
-const SHORT = {1:"2枚公開",2:"合計ヒント",3:"3枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
+const SHORT = {1:"ランダム公開",2:"合計ヒント",3:"3枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
 const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
@@ -309,7 +309,7 @@ function penalty(s, who, cause = "penalty") {
   if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
   reveal(s, who, rnd(pool), cause);
 }
-// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを1枚公開する（CPU同士の対戦で先攻勝率 56% → 52%）。
+// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを1枚公開する（CPU同士の対戦で先攻勝率 約52%）。
 // オンラインでは両者の準備完了を別々のクライアントが書くので、先攻の最初の操作（act）で一度だけ行う
 function startPlay(s) {
   s.phase = "play";
@@ -327,11 +327,7 @@ function startEffect(s, who, n) {
   const pend = () => { s.step = "effect"; s.pending = { eff: n }; };
   if (HINT_EFFECTS.includes(n) && op.shield) { op.shield = false; addLog(s, { k: "shieldBlock", who, target: 1 - who }); return endTurn(s); }
   switch (n) {
-    case 1: {
-      if (!hidden(op).length) { addLog(s, { k: "none", who }); return endTurn(s); }
-      for (let i = 0; i < 2 && s.phase === "play" && hidden(op).length; i++) reveal(s, 1 - who, rnd(hidden(op)), "e1");
-      return endTurn(s);
-    }
+    case 1: { const h = hidden(op); if (!h.length) { addLog(s, { k: "none", who }); return endTurn(s); } reveal(s, 1 - who, rnd(h), "e1"); return endTurn(s); }
     case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return endTurn(s); }
     case 4: me.shield = true; addLog(s, { k: "shield", who }); return endTurn(s);
     case 5: { const ev = op.mines.filter(m => m >= 6).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return endTurn(s); }
@@ -556,7 +552,7 @@ const effPhase = s => s.phase === "setup" && bothReady(s) ? "play" : s.phase;
 // ---------- ログ表示（見る人ごとに秘密を隠す） ----------
 function fmt(e, v) {
   const W = nm(e.who, v);
-  const causeTxt = { penalty: "ペナルティで", e1: "2枚公開で", e8: "指名で", handicap: "先攻ハンデで" };
+  const causeTxt = { penalty: "ペナルティで", e1: "ランダム公開で", e8: "指名で", handicap: "先攻ハンデで" };
   // ヒント系：引いた本人／知られた側／観戦者で文面を変える
   const told = (mine, theirs, other) => [e.who === v ? mine : v === 1 - e.who ? theirs : other];
   switch (e.k) {
