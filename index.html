@@ -243,6 +243,8 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 <div class="toast" id="toast" hidden></div>
 <div class="splash" id="splash" hidden></div>
 
+<!-- オンライン対戦：ブラウザ同士の直接通信（WebRTC）。接続の仲介は PeerJS の無料サーバー -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
 <script>
 "use strict";
 // ---------- 定数 ----------
@@ -535,7 +537,8 @@ let ui = {};                // 自分の操作中の選択（setupSel, mode, tru
 let me = 0;                 // 自分の席番号（オンラインでは -1 = 観戦）
 let cpuTimer = null;
 let spinBusyUntil = 0, lastSpinId = null, wheelRot = 0;
-const online = { db: null, dbReady: false, ref: null, unsub: null, code: null, uid: null, writing: Promise.resolve(), readOnly: false };
+// role: "host" = 部屋を作った側（進行役・席0） / "guest" = 参加した側（席1）
+const online = { peer: null, conn: null, role: null, code: null };
 
 const $ = sel => document.querySelector(sel);
 const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -636,7 +639,7 @@ function renderTop() {
 
 function renderStart() {
   const saved = load("lc_game");
-  const dbTxt = !online.dbReady ? "接続を確認しています…" : online.db ? "" : "オンライン対戦は claude.ai でこのページを開いたときに使えます。";
+  const p2p = !!window.Peer;
   const lastCode = load("lc_room");
   $("#main").innerHTML = `
   <section class="start">
@@ -653,10 +656,10 @@ function renderStart() {
       </div>
       <div class="mode">
         <h3>オンライン対戦</h3>
-        <p>部屋を作って4文字の部屋コードを相手に伝えます。相手は同じページを開いてコードを入力します。</p>
-        ${dbTxt ? `<p class="note">${esc(dbTxt)}</p>` : ""}
-        <div class="btns"><button class="btn" data-act="online-create" ${online.db ? "" : "disabled"}>部屋を作る</button></div>
-        <div class="join"><input id="joinCode" maxlength="4" placeholder="コード" autocomplete="off" value="${esc(lastCode || "")}" aria-label="部屋コード"><button class="btn ghost" data-act="online-join" ${online.db ? "" : "disabled"}>参加する</button></div>
+        <p>部屋を作って4文字の部屋コードを相手に伝えます。相手は同じページを開いてコードを入力します。アカウントは不要です。</p>
+        <p class="note">${p2p ? "部屋を作った人がページを閉じると部屋はなくなります。学校や会社のネットワークではつながらないことがあります。" : "通信ライブラリを読み込めなかったため、オンライン対戦は使えません。"}</p>
+        <div class="btns"><button class="btn" data-act="online-create" ${p2p ? "" : "disabled"}>部屋を作る</button></div>
+        <div class="join"><input id="joinCode" maxlength="4" placeholder="コード" autocomplete="off" value="${esc(lastCode || "")}" aria-label="部屋コード"><button class="btn ghost" data-act="online-join" ${p2p ? "" : "disabled"}>参加する</button></div>
       </div>
     </div>
   </section>`;
@@ -879,11 +882,19 @@ function commit(ns) {
   if (S.mode === "cpu") { store("lc_game", S); }
   syncWheel(true);
   render();
-  if (S.mode === "online") pushOnline();
+  if (S.mode === "online") sendState();
   scheduleCpu();
 }
 function doAct(a) {
-  try { commit(act(S, me, a)); }
+  try {
+    // 参加側は手元で妥当性だけ確かめ、進行役へ操作を送る（結果は進行役から届く）
+    if (online.role === "guest") {
+      act(S, me, a);
+      if (!online.conn?.open) return toast("相手とつながっていません");
+      online.conn.send({ t: "act", a }); ui = {}; return render();
+    }
+    commit(act(S, me, a));
+  }
   catch (e) { if (e.user) toast(e.message); else { console.error(e); toast("エラーが発生しました"); } }
 }
 function scheduleCpu() {
@@ -908,87 +919,122 @@ function confirmSetup(sel) {
     const two = [...NUMS].sort(() => Math.random() - .5).slice(0, 2).sort((a, b) => a - b);
     s.p1.mines = two; s.p1.ready = true; startPlay(s);
     commit(s);
+  } else if (online.role === "guest") {
+    if (!online.conn?.open) return toast("相手とつながっていません");
+    S = clone(S); S.p1.mines = sel; S.p1.ready = true; ui = {}; render();
+    online.conn.send({ t: "setup", mines: sel });
   } else {
-    const key = "p" + me;
-    S = clone(S); S[key].mines = sel; S[key].ready = true; ui = {};
-    if (bothReady(S)) S.phase = "play";
-    render();
-    write(() => online.ref.update({ [key]: { mines: sel, ready: true } }));
+    const s = clone(S);
+    s.p0.mines = sel; s.p0.ready = true;
+    if (bothReady(s)) startPlay(s);
+    commit(s);
   }
 }
 
-// ---------- オンライン ----------
-function write(fn) {
-  online.writing = online.writing.then(fn).catch(e => {
-    console.error(e);
-    if (e && e.code === "invalid_argument") { online.readOnly = true; toast("書き込みできませんでした。部屋の持ち主に、このページの編集権限で招待してもらってください。"); }
-    else toast("通信に失敗しました。もう一度試してください。");
-  });
-  return online.writing;
-}
-function pushOnline() { if (online.ref && me !== -1) { const snap = clone(S); write(() => online.ref.set(snap)); } }
-function seatOf(s) { return s.p0.uid === online.uid ? 0 : s.p1.uid === online.uid ? 1 : -1; }
-function subscribe(code) {
-  if (online.unsub) online.unsub();
-  online.code = code; online.ref = online.db.doc("games/" + code);
-  store("lc_room", code);
-  let first = true;
-  online.unsub = online.ref.onSnapshot(snap => {
-    if (!snap.exists) return;
-    const data = clone(snap.data());
-    if (data.v !== STATE_V) { toast("この部屋は古いルール（場のある版）のものです。新しく部屋を作ってください。"); leaveOnline(); screen = "start"; S = null; return render(); }
-    if (data.phase === "setup" && bothReady(data)) data.phase = "play";
-    const prevMe = me; S = data; me = seatOf(S);
-    if (prevMe !== me) ui = {};
-    if (S.phase === "setup" && me !== -1 && !P(S, me).ready && !ui.setupSel) ui.setupSel = [];
-    syncWheel(!first);
-    first = false;
-    screen = "game"; render();
-  }, err => { console.error(err); toast("部屋との接続が切れました。ページを開き直してください。"); });
-}
+// ---------- オンライン（P2P） ----------
+// 部屋コードは PeerJS の ID に使う。ID は PeerJS サーバー全体で共有なので、ゲーム固有の接頭辞を付ける
+const PEER_PREFIX = "logical-casino-v3-";
 function genCode() { const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let c = ""; for (let i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)]; return c; }
-async function createRoom() {
-  if (!online.db) return;
-  const code = genCode();
-  const s = newGame("online", online.uid, null);
-  S = s; me = 0; ui = { setupSel: [] }; screen = "game"; online.code = code; lastSpinId = null;
-  render();
-  online.ref = online.db.doc("games/" + code);
-  await write(() => online.ref.set(s));
-  subscribe(code);
+function peerErr(e) {
+  if (["network", "server-error", "socket-error", "socket-closed"].includes(e.type)) return "通信サーバーにつながりませんでした。ネットワークを確認してください。";
+  if (e.type === "browser-incompatible") return "このブラウザはオンライン対戦に対応していません";
+  return `通信エラーが発生しました（${e.type}）`;
 }
-async function joinRoom(code) {
+// 参加側に送る状態。決着までは進行役の秘密（地雷・おとりの場所・切り札の中身）を伏せる
+function viewForGuest(s) {
+  const v = clone(s);
+  if (v.phase === "over") return v;
+  v.p0.mines = [];
+  if (v.p0.decoy != null) v.p0.decoy = -1;
+  for (const e of v.log) if (e.who === 0 && (e.k === "trump" || e.k === "decoy")) { delete e.a; delete e.b; delete e.n; }
+  return v;
+}
+function sendState() { if (online.role === "host" && online.conn?.open) online.conn.send({ t: "state", s: viewForGuest(S) }); }
+function newRound() {
+  lastSpinId = null;
+  commit(newGame("online", "host", online.conn?.open ? "guest" : null));
+  ui = { setupSel: [] }; render();
+}
+function createRoom() {
+  if (!window.Peer) return toast("通信の準備ができていません");
+  leaveOnline();
+  const code = genCode(), peer = new Peer(PEER_PREFIX + code);
+  Object.assign(online, { peer, role: "host", code });
+  peer.on("open", () => {
+    S = newGame("online", "host", null); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null; render();
+  });
+  peer.on("connection", c => {
+    // 対戦できるのは1人だけ。つながっている相手がいれば断る
+    if (online.conn?.open) { c.on("open", () => { c.send({ t: "full" }); setTimeout(() => c.close(), 500); }); return; }
+    online.conn = c;
+    c.on("open", () => {
+      if (!S.p1.uid) { S = clone(S); S.p1.uid = "guest"; }
+      toast("相手が参加しました"); render(); sendState();
+    });
+    c.on("data", onGuestData);
+    c.on("close", () => { if (online.conn !== c) return; online.conn = null; toast("相手との接続が切れました。相手は同じコードで再参加できます。"); render(); });
+  });
+  // 仲介サーバーとの接続だけ切れた場合は、再参加を受け付けられるようにつなぎ直す
+  peer.on("disconnected", () => { if (!peer.destroyed) peer.reconnect(); });
+  peer.on("error", e => {
+    if (e.type === "unavailable-id") return createRoom(); // コードが使用中なら別のコードで作り直す
+    console.error(e); toast(peerErr(e));
+  });
+}
+function onGuestData(msg) {
+  if (online.role !== "host" || !S || S.mode !== "online") return;
+  if (msg.t === "setup") {
+    const m = [...new Set(msg.mines || [])].filter(n => NUMS.includes(n)).sort((a, b) => a - b);
+    if (m.length !== 2 || S.p1.ready) return;
+    const s = clone(S); s.p1.mines = m; s.p1.ready = true;
+    if (bothReady(s)) startPlay(s);
+    const sel = ui.setupSel; commit(s);
+    if (sel) { ui.setupSel = sel; render(); } // 自分が地雷を選んでいる途中なら選択を残す
+    return;
+  }
+  if (msg.t === "act") {
+    try { commit(act(S, 1, msg.a)); }
+    catch (e) { if (!e.user) console.error(e); online.conn?.send({ t: "error", msg: e.user ? e.message : "エラーが発生しました" }); }
+    return;
+  }
+  if (msg.t === "again" && S.phase === "over") return newRound();
+}
+function joinRoom(code) {
   code = (code || "").trim().toUpperCase();
   if (!/^[A-Z0-9]{4}$/.test(code)) return toast("4文字の部屋コードを入力してください");
-  const ref = online.db.doc("games/" + code);
-  let snap;
-  try { snap = await ref.get(); } catch (e) { return toast("部屋を読み込めませんでした"); }
-  if (!snap.exists) return toast(`部屋 ${code} は見つかりませんでした`);
-  const d = snap.data();
-  if (d.v !== STATE_V) return toast("この部屋は古いルール（場のある版）のものです。新しく部屋を作ってください。");
-  online.ref = ref; online.code = code; lastSpinId = null;
-  if (d.p0.uid !== online.uid && d.p1.uid !== online.uid && !d.p1.uid) {
-    await write(() => ref.update({ p1: { uid: online.uid } }));
-  } else if (d.p0.uid !== online.uid && d.p1.uid !== online.uid) {
-    toast("この部屋は満席なので観戦します");
-  }
-  subscribe(code);
+  if (!window.Peer) return toast("通信の準備ができていません");
+  leaveOnline();
+  store("lc_room", code);
+  const peer = new Peer();
+  Object.assign(online, { peer, role: "guest", code });
+  toast("接続しています…");
+  peer.on("open", () => {
+    const c = peer.connect(PEER_PREFIX + code, { reliable: true });
+    online.conn = c;
+    c.on("data", onHostData);
+    c.on("close", () => { if (online.conn !== c) return; online.conn = null; toast("部屋との接続が切れました。もう一度「参加する」で戻れます。"); render(); });
+  });
+  peer.on("error", e => {
+    console.error(e);
+    toast(e.type === "peer-unavailable" ? `部屋 ${code} が見つかりません。コードと、作った人がページを開いたままかを確認してください。` : peerErr(e));
+    if (screen === "start") leaveOnline();
+  });
+}
+function onHostData(msg) {
+  if (online.role !== "guest") return;
+  if (msg.t === "full") { toast("この部屋は満席です"); leaveOnline(); return; }
+  if (msg.t === "error") return toast(msg.msg);
+  if (msg.t !== "state") return;
+  const first = screen !== "game" || !S || S.mode !== "online";
+  const sel = ui.setupSel;
+  if (first) lastSpinId = null;
+  S = msg.s; me = 1; screen = "game";
+  if (S.phase === "setup" && !S.p1.ready) ui.setupSel = sel || [];
+  syncWheel(!first); render();
 }
 function leaveOnline() {
-  if (online.unsub) online.unsub();
-  online.unsub = null; online.ref = null; online.code = null;
-}
-async function initOnline() {
-  try {
-    if (!window.claude || !window.claude.use) throw 0;
-    const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
-    online.db = db;
-    let id = user ? await user.id() : null;
-    if (!id) { id = load("lc_uid"); if (!id) { id = "g" + Math.random().toString(36).slice(2, 12); store("lc_uid", id); } }
-    online.uid = id;
-  } catch (e) { online.db = null; }
-  online.dbReady = true;
-  if (screen === "start") render();
+  if (online.peer) { try { online.peer.destroy(); } catch (e) {} }
+  Object.assign(online, { peer: null, conn: null, role: null, code: null });
 }
 
 // ---------- ルール ----------
@@ -1056,8 +1102,8 @@ document.addEventListener("click", ev => {
     case "e3-ok": return doAct({ type: "eff", ns: ui.e3 || [] });
     case "again": {
       if (S.mode === "cpu") return startCpu();
-      const s = newGame("online", S.p0.uid, S.p1.uid);
-      lastSpinId = null; ui = { setupSel: [] }; S = s; render(); pushOnline(); return;
+      if (online.role === "guest") { online.conn?.send({ t: "again" }); return toast("もう一度の対戦を申し込みました"); }
+      return newRound();
     }
     case "my-card": {
       const s = S, phase = effPhase(s), mp = P(s, me);
@@ -1091,7 +1137,6 @@ function start(data) {
   }
   render();
   scheduleCpu();
-  initOnline();
 }
 try { window.claude?.hot?.snapshot?.(() => ({ S: S && S.mode === "cpu" ? S : null, screen: S && S.mode === "cpu" ? screen : "start" })); } catch (e) {}
 (() => {
