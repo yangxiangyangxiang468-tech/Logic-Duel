@@ -357,6 +357,12 @@ function endTurn(s) {
   s.turn = 1 - s.turn; s.turnNo++; s.step = "action"; s.pending = null;
 }
 
+// ルーレットの出目。同じ数字が3回続かないよう、直前の2回（両者の通し）が同じならその数字を除いて選ぶ
+function rollSpin(s) {
+  const [a, b] = s.recentSpins || [];
+  return rnd(a != null && a === b ? NUMS.filter(n => n !== a) : NUMS);
+}
+
 function startEffect(s, who, n) {
   const me = P(s, who), op = P(s, 1 - who);
   const pend = () => { s.step = "effect"; s.pending = { eff: n }; };
@@ -441,7 +447,8 @@ function act(s0, who, a) {
     case "spin": {
       if (s.step !== "action") fail("ルーレットは自分の番の最初に回します");
       if (me.sealed) fail("封印されているので、この番はルーレットを回せません");
-      const n = a.n || 1 + Math.floor(Math.random() * 10);
+      const n = a.n || rollSpin(s);
+      s.recentSpins = [...(s.recentSpins || []), n].slice(-2);
       s.spin = { who, n, id: Date.now() + "-" + Math.floor(Math.random() * 1e6) };
       addLog(s, { k: "spin", who, n });
       startEffect(s, who, n);
