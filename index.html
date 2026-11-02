@@ -257,21 +257,22 @@ const NUMS = [1,2,3,4,5,6,7,8,9,10];
 const EFFECTS = {
   1: "相手の公開されていないカードを1枚ランダムに公開する（地雷なら判明）",
   2: "相手の地雷2枚の合計値がわかる",
-  3: "数字を3つ指定し、その中に相手の地雷が何枚あるか聞く",
+  3: "数字を2つ指定し、その中に相手の地雷が何枚あるか聞く",
   4: "シールド：相手が次にあなたのヒント（2・3・5・6・7）を得るのを1回防ぐ",
   5: "相手の地雷2枚のうち、6以上が何枚あるかわかる",
   6: "相手の地雷2枚の偶奇がわかる（2枚とも偶数／2枚とも奇数／1枚ずつ）",
-  7: "数字を1つ指定し、いちばん近い相手の地雷までの差を聞く",
+  7: "数字を1つ指定し、いちばん近い相手の地雷までの差を聞く（わかるのは差2まで。それより遠ければ「3以上」）",
   8: "数字を1つ指名し、相手のそのカードを公開する（地雷なら判明。外れてもペナルティなし）",
   9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ。相手がその数字を推理して外したらペナルティが2枚になる",
   10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
 };
-const SHORT = {1:"ランダム公開",2:"合計ヒント",3:"3枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
+const SHORT = {1:"ランダム公開",2:"合計ヒント",3:"2枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
 const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
-const STATE_V = 3; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし）の保存データは読み込まない
+const STATE_V = 4; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問・距離の上限なし）の保存データは読み込まない
+const DIST_CAP = 3; // 距離ヒントは差2までを答え、3以上はまとめて「3以上」
 
 // ---------- ゲームエンジン（純粋関数） ----------
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -283,6 +284,8 @@ const ep = p => p.trumpUsed ? 1 : 0;
 const bothReady = s => s.p0.ready && s.p1.ready;
 const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
 const distTo = (x, pair) => Math.min(Math.abs(x - pair[0]), Math.abs(x - pair[1]));
+const distHint = (x, pair) => Math.min(distTo(x, pair), DIST_CAP);
+const distTxt = d => d >= DIST_CAP ? "3以上" : String(d);
 
 function newPlayer(uid) {
   const cards = {};
@@ -351,7 +354,7 @@ function resolveEffect(s, who, a) {
   if (a.skip) { addLog(s, { k: "skip", who }); return endTurn(s); }
   switch (eff) {
     case 3: {
-      const un = hidden(op), need = Math.min(3, un.length);
+      const un = hidden(op), need = Math.min(2, un.length);
       const ns = [...new Set(a.ns || [])].sort((x, y) => x - y);
       if (ns.length !== need || !ns.every(n => un.includes(n))) fail(`まだ公開されていない数字を${need}つ選んでください`);
       const c = op.mines.filter(m => ns.includes(m)).length;
@@ -360,7 +363,7 @@ function resolveEffect(s, who, a) {
     }
     case 7: {
       const x = a.n; if (!NUMS.includes(x)) fail("数字を選んでください");
-      const d = distTo(x, op.mines);
+      const d = distHint(x, op.mines);
       op.facts.push({ t: "dist", x, d, e: ep(op) });
       addLog(s, { k: "dist", who, x, d }); return endTurn(s);
     }
@@ -439,7 +442,7 @@ function okAt(pair, facts, e) {
     if (f.t === "cnt" && pair.filter(x => f.ns.includes(x)).length !== f.c) return false;
     if (f.t === "par" && pair.filter(x => x % 2 === 0).length !== f.ev) return false;
     if (f.t === "big" && pair.filter(x => x >= 6).length !== f.ev) return false;
-    if (f.t === "dist" && distTo(f.x, pair) !== f.d) return false;
+    if (f.t === "dist" && distHint(f.x, pair) !== f.d) return false;
   }
   return true;
 }
@@ -512,17 +515,17 @@ function cpuDecide(s) {
     switch (e) {
       case 3: {
         const un = hidden(op);
-        if (un.length <= 3) return { type: "eff", ns: un };
+        if (un.length <= 2) return { type: "eff", ns: un };
         let best = null, bestH = -1;
-        for (let i = 0; i < un.length; i++) for (let j = i + 1; j < un.length; j++) for (let k = j + 1; k < un.length; k++) {
-          const ns = [un[i], un[j], un[k]], h = entropy(r, pair => pair.filter(x => ns.includes(x)).length);
+        for (let i = 0; i < un.length; i++) for (let j = i + 1; j < un.length; j++) {
+          const ns = [un[i], un[j]], h = entropy(r, pair => pair.filter(x => ns.includes(x)).length);
           if (h > bestH) { bestH = h; best = ns; }
         }
         return { type: "eff", ns: best };
       }
       case 7: {
         let best = 1, bestH = -1;
-        for (const x of NUMS) { const h = entropy(r, pair => distTo(x, pair)); if (h > bestH) { bestH = h; best = x; } }
+        for (const x of NUMS) { const h = entropy(r, pair => distHint(x, pair)); if (h > bestH) { bestH = h; best = x; } }
         return { type: "eff", n: best };
       }
       case 8: return { type: "eff", n: hidden(op).sort((a, b) => r.prob[b] - r.prob[a])[0] };
@@ -571,10 +574,10 @@ function fmt(e, v) {
     case "nopen": return [`${W}は公開できるカードがない`];
     case "spin": return [`${W}のルーレット → ${e.n}「${SHORT[e.n]}」`];
     case "sum": return told(`${oppName()}の地雷の合計は ${e.s}`, `あなたの地雷の合計（${e.s}）を知られた`, `${W}が合計ヒントを得た`);
-    case "cnt": return told(`${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚`, `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた`, `${W}が3枚質問をした`);
+    case "cnt": return told(`${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚`, `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた`, `${W}が2枚質問をした`);
     case "big": return told(`${oppName()}の地雷は${MBIG[e.ev]}`, `あなたの地雷の大小（${MBIG[e.ev]}）を知られた`, `${W}が大小ヒントを得た`);
     case "mpar": return told(`${oppName()}の地雷は${MPAR[e.ev]}`, `あなたの地雷の偶奇（${MPAR[e.ev]}）を知られた`, `${W}が偶奇ヒントを得た`);
-    case "dist": return told(`${oppName()}の地雷のうち ${e.x} にいちばん近いものは差 ${e.d}`, `${e.x} からあなたの地雷までの差（${e.d}）を知られた`, `${W}が距離ヒントを得た`);
+    case "dist": return told(`${oppName()}の地雷のうち ${e.x} にいちばん近いものは差 ${distTxt(e.d)}`, `${e.x} からあなたの地雷までの差（${distTxt(e.d)}）を知られた`, `${W}が距離ヒントを得た`);
     case "none": return [`${W}: 対象のカードがなく効果なし`];
     case "skip": return [`${W}は効果を使わなかった`];
     case "shield": return [`${W}がシールドを張った`];
@@ -812,7 +815,7 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
     const head = `<div class="effect-card"><div class="big">${e}</div><div class="prompt">${esc(EFFECTS[e])}</div></div>`;
     const skip = label => `<button class="btn quiet sm" data-act="eff-skip">${label}</button>`;
     switch (e) {
-      case 3: { const need = Math.min(3, hidden(op).length), sel = ui.e3 || [];
+      case 3: { const need = Math.min(2, hidden(op).length), sel = ui.e3 || [];
         return wrap(`${head}<div class="prompt"><small>数字を ${need} つ選んでください（選択中: ${sel.join("・") || "なし"}）。</small></div>${numpad("e3", op, r, sel)}<div class="btns"><button class="btn sm" data-act="e3-ok" ${sel.length === need ? "" : "disabled"}>この${need}つで聞く</button>${skip("使わない")}</div>`); }
       case 7: return wrap(`${head}<div class="prompt"><small>公開済みの数字も指定できます。</small></div>${numpad("e7", op, r, [], true)}<div class="btns">${skip("使わない")}</div>`);
       case 8: return wrap(`${head}${numpad("e8", op, r)}<div class="btns">${skip("使わない")}</div>`);
@@ -876,7 +879,7 @@ function renderAssist(s, phase, op, mp, over) {
 }
 // p の地雷について公開されたヒント（効果2・3・5・6・7）を表示用の文字列にする
 function hintList(p) {
-  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => MBIG[f.ev], par: f => MPAR[f.ev], dist: f => `${f.x} から差 ${f.d}` };
+  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => MBIG[f.ev], par: f => MPAR[f.ev], dist: f => `${f.x} から差 ${distTxt(f.d)}` };
   return p.facts.filter(f => txt[f.t]).map(f => txt[f.t](f) + (p.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
 }
 
@@ -938,7 +941,7 @@ function confirmSetup(sel) {
 
 // ---------- オンライン（P2P） ----------
 // 部屋コードは PeerJS の ID に使う。ID は PeerJS サーバー全体で共有なので、ゲーム固有の接頭辞を付ける
-const PEER_PREFIX = "logical-casino-v3-";
+const PEER_PREFIX = `logical-casino-v${STATE_V}-`; // ルールの版が違うページ同士はつながらない
 function genCode() { const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let c = ""; for (let i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)]; return c; }
 function peerErr(e) {
   if (["network", "server-error", "socket-error", "socket-closed"].includes(e.type)) return "通信サーバーにつながりませんでした。ネットワークを確認してください。";
@@ -1098,7 +1101,7 @@ document.addEventListener("click", ev => {
       if (kind === "guess") return doAct({ type: "guess", n });
       if (kind === "e3") {
         const sel = ui.e3 || (ui.e3 = []), i = sel.indexOf(n);
-        if (i >= 0) sel.splice(i, 1); else { if (sel.length >= 3) sel.shift(); sel.push(n); }
+        if (i >= 0) sel.splice(i, 1); else { if (sel.length >= 2) sel.shift(); sel.push(n); }
         return render();
       }
       return doAct({ type: "eff", n });
