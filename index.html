@@ -180,12 +180,20 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .combo.top { border-color: var(--brass); }
 .meter { height: 6px; border-radius: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--danger); }
-.log { max-height: 280px; overflow-y: auto; display: grid; align-content: start; gap: 2px; font-size: 13px; padding-right: 4px; }
-.log div { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 6px; }
-.log .t { font-family: var(--f-mono); font-size: 11px; color: var(--muted); padding-top: 2px; }
-.log .me { color: var(--ivory); }
-.log .op { color: var(--muted); }
-.log .hit { color: var(--danger); font-weight: 700; }
+.log { max-height: 280px; overflow-y: auto; display: grid; align-content: start; gap: 6px; font-size: 13px; padding-right: 4px; }
+/* 記録は手番ごとのまとまり。左の線で誰の番か（金 = 自分、灰 = 相手）、先頭のラベルで出来事の種類がわかる */
+.lg { display: grid; gap: 3px; padding: 4px 6px 5px 9px; border-left: 3px solid var(--line); }
+.lg.me { border-left-color: var(--brass); }
+.lg.latest { background: rgba(214,173,87,.09); border-radius: 0 6px 6px 0; }
+.lg-h { font-family: var(--f-mono); font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+.lg.me .lg-h { color: var(--brass); }
+.lg-i { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 6px; align-items: baseline; color: var(--text); line-height: 1.45; }
+.lg-i.hit { color: var(--danger); font-weight: 700; }
+.kind { font-size: 10px; text-align: center; border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; white-space: nowrap; color: var(--muted); font-weight: 500; }
+.k-guess { color: var(--ivory); border-color: var(--ivory); }
+.k-spin, .k-trump { color: var(--brass); border-color: var(--brass-dim); }
+.k-hint, .k-def { color: var(--ok); border-color: var(--ok); }
+.k-mine, .k-win { color: var(--danger); border-color: var(--danger); }
 
 /* start screen */
 .start { display: grid; gap: 22px; padding-block: 12px; }
@@ -263,7 +271,7 @@ const EFFECTS = {
   6: "相手の地雷2枚の偶奇がわかる（2枚とも偶数／2枚とも奇数／1枚ずつ）",
   7: "数字を1つ指定し、その数字から差2以内（例：7なら5〜9）に相手の地雷があるかを聞く",
   8: "数字を1つ指名し、相手のそのカードを公開する（地雷なら判明。外れてもペナルティなし）",
-  9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ。相手がその数字を推理して外したらペナルティが2枚になる",
+  9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ（最大2枚まで）。相手がその数字を推理して外すと、相手のカードが公開される（1回目1枚、2回目以降2枚）",
   10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
 };
 const SHORT = {1:"ランダム公開",2:"合計ヒント",3:"2枚質問",4:"シールド",5:"大小ヒント",6:"偶奇ヒント",7:"距離ヒント",8:"指名",9:"おとり",10:"封印"};
@@ -271,7 +279,8 @@ const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
-const STATE_V = 5; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問 / v4: 距離ヒントが差を答える）の保存データは読み込まない
+const STATE_V = 6; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問 / v4: 距離ヒントが差を答える / v5: おとり1枚）の保存データは読み込まない
+const MAX_DECOYS = 2;
 const NEAR = 2; // 距離ヒントは「差2以内に地雷があるか」だけを答える
 
 // ---------- ゲームエンジン（純粋関数） ----------
@@ -289,7 +298,7 @@ const nearHint = (x, pair) => distTo(x, pair) <= NEAR;
 function newPlayer(uid) {
   const cards = {};
   for (const n of NUMS) cards[n] = { r: false };
-  return { uid: uid || null, ready: false, mines: [], found: [], cards, trumpUsed: false, shield: false, decoy: null, sealed: false, facts: [], swapUnrev: null };
+  return { uid: uid || null, ready: false, mines: [], found: [], cards, trumpUsed: false, shield: false, decoys: [], decoyHits: 0, sealed: false, facts: [], swapUnrev: null };
 }
 function newGame(mode, uid0, uid1) {
   return { v: STATE_V, mode, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
@@ -301,7 +310,7 @@ function reveal(s, owner, n, cause) {
   const p = P(s, owner), c = C(p, n);
   if (c.r) return;
   c.r = true;
-  if (p.decoy === n) p.decoy = null;
+  p.decoys = p.decoys.filter(x => x !== n);
   if (isMine(p, n) && !p.found.includes(n)) {
     p.found.push(n);
     p.facts.push({ t: "mine", n, e: ep(p) });
@@ -311,6 +320,23 @@ function reveal(s, owner, n, cause) {
     p.facts.push({ t: "not", n, e: ep(p) });
     addLog(s, { k: "reveal", owner, n, mine: false, cause });
   }
+}
+// おとりを踏んだ側（who）のカードを公開する。枚数はおとりの持ち主が踏まれた回数で決まり、
+// 持ち主だけ地雷が1枚判明している（踏んだ側は0枚）ときは追い上げとして3枚。
+// ただし踏んだ側の地雷が確定しないよう、伏せた地雷以外のカードを残りの地雷の枚数以上は残す（地雷の確率が50%を超えない）。
+// その上限まで公開するときは、相手から見て地雷っぽいカードを伏せたまま残して地雷と抱き合わせにする
+function decoyPenalty(s, who, n) {
+  const p = P(s, who), owner = P(s, 1 - who);
+  owner.decoyHits++;
+  const want = owner.found.length === 1 && p.found.length === 0 ? 3 : owner.decoyHits === 1 ? 1 : 2;
+  const pool = NUMS.filter(x => !C(p, x).r && !isMine(p, x));
+  const left = p.mines.filter(m => !p.found.includes(m)).length;
+  const k = Math.min(want, Math.max(0, pool.length - left));
+  let picks;
+  if (pool.length - k > left) picks = [...pool].sort(() => Math.random() - .5).slice(0, k);
+  else { const r = solve(p); picks = [...pool].sort((a, b) => r.prob[a] - r.prob[b]).slice(0, k); }
+  addLog(s, { k: "decoyHit", who, n, cnt: k, want });
+  for (const x of picks) reveal(s, who, x, "decoy");
 }
 function penalty(s, who, cause = "penalty") {
   const p = P(s, who);
@@ -342,7 +368,7 @@ function startEffect(s, who, n) {
     case 5: { const ev = op.mines.filter(m => m >= 6).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return endTurn(s); }
     case 6: { const ev = op.mines.filter(m => m % 2 === 0).length; op.facts.push({ t: "par", ev, e: ep(op) }); addLog(s, { k: "mpar", who, ev }); return endTurn(s); }
     case 10: op.sealed = true; addLog(s, { k: "seal", who, target: 1 - who }); return endTurn(s);
-    case 9: if (!hidden(me).some(x => !isMine(me, x))) { addLog(s, { k: "none", who }); return endTurn(s); } return pend();
+    case 9: if (!hidden(me).some(x => !isMine(me, x) && !me.decoys.includes(x))) { addLog(s, { k: "none", who }); return endTurn(s); } return pend();
     case 3: case 7: case 8: return pend();
   }
 }
@@ -372,7 +398,9 @@ function resolveEffect(s, who, a) {
     }
     case 9: {
       const n = a.n; if (!NUMS.includes(n) || C(me, n).r || isMine(me, n)) fail("地雷ではない、公開されていない自分のカードを選んでください");
-      me.decoy = n; addLog(s, { k: "decoy", who, n }); return endTurn(s);
+      if (me.decoys.includes(n)) fail("そのカードはもうおとりです");
+      me.decoys = [...me.decoys, n].slice(-MAX_DECOYS); // 3枚目を仕掛けたら古いほうが消える
+      addLog(s, { k: "decoy", who, n }); return endTurn(s);
     }
   }
 }
@@ -391,7 +419,7 @@ function act(s0, who, a) {
       if (C(me, a.b)?.r !== false || isMine(me, a.b)) fail("地雷ではない、公開されていないカードを選んでください");
       me.swapUnrev = NUMS.filter(n => !C(me, n).r && !me.found.includes(n));
       me.mines = me.mines.map(x => x === a.a ? a.b : x);
-      if (me.decoy === a.b) me.decoy = null;
+      me.decoys = me.decoys.filter(x => x !== a.b);
       me.trumpUsed = true;
       addLog(s, { k: "trump", who, a: a.a, b: a.b });
       break;
@@ -403,9 +431,9 @@ function act(s0, who, a) {
       if (isMine(op, n)) { addLog(s, { k: "guessHit", who, n }); reveal(s, 1 - who, n, "guess"); }
       else {
         op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n });
-        if (op.decoy === n) { op.decoy = null; addLog(s, { k: "decoyHit", who, n }); penalty(s, who); }
         C(op, n).r = true; // 外れた数字は地雷ではないと確定するので表にする
-        penalty(s, who);
+        if (op.decoys.includes(n)) { op.decoys = op.decoys.filter(x => x !== n); decoyPenalty(s, who, n); }
+        else penalty(s, who);
       }
       endTurn(s);
       break;
@@ -504,7 +532,7 @@ function cpuDecide(s) {
     const cand = hidden(op).sort((a, b) => r.prob[b] - r.prob[a]);
     const best = cand[0], pb = r.prob[best];
     // おとりが仕掛けられているときは、確信が持てるまで推理しない
-    const bold = op.decoy == null && pb >= 0.34 && Math.random() < 0.5;
+    const bold = !op.decoys.length && pb >= 0.34 && Math.random() < 0.5;
     if (pb >= 0.5 || r.count <= 2 || bold) return { type: "guess", n: best };
     if (me.sealed) return pb >= 0.25 ? { type: "guess", n: best } : { type: "pass" };
     return { type: "spin" };
@@ -530,7 +558,8 @@ function cpuDecide(s) {
       case 8: return { type: "eff", n: hidden(op).sort((a, b) => r.prob[b] - r.prob[a])[0] };
       case 9: {
         // 相手から見て地雷っぽい（推理されやすい）安全なカードをおとりにする
-        const mr = solve(me), safe = hidden(me).filter(n => !isMine(me, n)).sort((a, b) => mr.prob[b] - mr.prob[a]);
+        const mr = solve(me), safe = hidden(me).filter(n => !isMine(me, n) && !me.decoys.includes(n)).sort((a, b) => mr.prob[b] - mr.prob[a]);
+        if (!safe.length) return { type: "eff", skip: true };
         return { type: "eff", n: safe[0] };
       }
     }
@@ -582,13 +611,27 @@ function fmt(e, v) {
     case "shield": return [`${W}がシールドを張った`];
     case "shieldBlock": return [`${nm(e.target, v)}のシールドがヒントを防いだ`];
     case "decoy": return [e.who === v ? `おとりを ${e.n} に仕掛けた` : `${W}がおとりを仕掛けた`];
-    case "decoyHit": return [`${W}の推理「${e.n}」はおとりだった！ペナルティ2枚`, "hit"];
+    case "decoyHit": return [`${W}の推理「${e.n}」はおとりだった！ペナルティ${e.cnt}枚` + (e.cnt < e.want ? `（地雷が確定しないよう${e.want}枚から減らした）` : ""), "hit"];
     case "seal": return [`${nm(e.target, v)}は次の番、ルーレットを回せない`];
     case "pass": return [`${W}はパスした`];
     case "trump": return [e.who === v ? `切り札：地雷を ${e.a} から ${e.b} に移した` : `${W}が切り札を使った（中身は秘密）`, "hit"];
     case "win": return [e.who === v ? "あなたの勝ち！" : `${W}の勝ち`, "hit"];
   }
   return null;
+}
+
+// 記録の行頭ラベル：[CSS用の種類, 表示名]
+function logKind(e) {
+  switch (e.k) {
+    case "guessHit": case "guessMiss": case "decoyHit": return ["guess", "推理"];
+    case "spin": return ["spin", "ルーレット"];
+    case "sum": case "cnt": case "big": case "mpar": case "dist": return ["hint", "ヒント"];
+    case "reveal": return e.mine ? ["mine", "地雷"] : ["open", "公開"];
+    case "shield": case "shieldBlock": case "decoy": case "seal": return ["def", "守り"];
+    case "trump": return ["trump", "切り札"];
+    case "win": return ["win", "決着"];
+  }
+  return ["etc", "—"];
 }
 
 // ---------- ルーレット ----------
@@ -694,7 +737,7 @@ function renderGame() {
     `<span class="chip ${p.found.length ? (mine ? "bad" : "on") : ""}">判明した地雷 ${p.found.length}/2</span>`,
     `<span class="chip ${p.trumpUsed ? "" : "on"}">切り札 ${p.trumpUsed ? "使用済み" : "あり"}</span>`,
     p.shield ? `<span class="chip on">シールドあり</span>` : "",
-    p.decoy != null ? `<span class="chip on">${mine ? `おとり ${p.decoy}` : "おとりあり"}</span>` : "",
+    p.decoys.length ? `<span class="chip on">${mine ? `おとり ${p.decoys.join("・")}` : `おとり ${p.decoys.length}枚`}</span>` : "",
     p.sealed && !over ? `<span class="chip bad">封印中</span>` : "",
   ].join("");
 
@@ -706,7 +749,7 @@ function renderGame() {
     if (!myTurn) return false;
     if (ui.mode === "trumpA") return isMine(mp, n) && !mp.found.includes(n);
     if (ui.mode === "trumpB") return pickSafe(n);
-    if (s.step === "effect" && s.pending?.eff === 9) return pickSafe(n);
+    if (s.step === "effect" && s.pending?.eff === 9) return pickSafe(n) && !mp.decoys.includes(n);
     return false;
   };
   const myCard = n => {
@@ -715,13 +758,13 @@ function renderGame() {
     let cls = [];
     if (mp.found.includes(n)) cls.push("found"); else if (isMine(mp, n) && !setupMode) cls.push("mine");
     if (c.r) cls.push("seen");
-    if (mp.decoy === n && me !== -1) cls.push("decoy");
+    if (mp.decoys.includes(n) && me !== -1) cls.push("decoy");
     if (sel) cls.push("sel");
     const can = clickable(n);
     if (can && !setupMode) cls.push("pickable");
     const anyPick = setupMode || (myTurn && (ui.mode || (s.step === "effect" && s.pending?.eff === 9)));
     if (anyPick && !can && !sel) cls.push("dim");
-    const tag = c.r ? "公開" : mp.decoy === n && me !== -1 ? "おとり" : "";
+    const tag = c.r ? "公開" : mp.decoys.includes(n) && me !== -1 ? "おとり" : "";
     return cardHTML(n, cls.join(" "), can ? "my-card" : "", `data-n="${n}"`, tag);
   };
 
@@ -732,10 +775,15 @@ function renderGame() {
   const assist = renderAssist(s, phase, op, mp, over);
 
   // --- ログ ---
-  const logHTML = s.log.slice().reverse().map(e => {
-    const r = fmt(e, v); if (!r) return "";
-    const who = e.who ?? e.owner ?? e.target;
-    return `<div><span class="t">T${e.t}</span><span class="${r[1] === "hit" ? "hit" : who === v ? "me" : "op"}">${esc(r[0])}</span></div>`;
+  // 手番ごとにまとめ、新しい番を上に。番の中は起きた順。番 t は先攻（席0）が奇数、後攻が偶数
+  const turns = new Map();
+  for (const e of s.log) { const r = fmt(e, v); if (r) (turns.get(e.t) || turns.set(e.t, []).get(e.t)).push([e, r]); }
+  const logHTML = [...turns.entries()].reverse().map(([t, items], i) => {
+    const actor = (t - 1) % 2;
+    return `<div class="lg ${actor === v ? "me" : "op"} ${i === 0 ? "latest" : ""}"><div class="lg-h">T${t}・${esc(nm(actor, v))}の番</div>${items.map(([e, r]) => {
+      const [kind, label] = logKind(e);
+      return `<div class="lg-i ${r[1] === "hit" ? "hit" : ""}"><span class="kind k-${kind}">${label}</span><span>${esc(r[0])}</span></div>`;
+    }).join("")}</div>`;
   }).join("") || `<p class="note">ここに対戦の記録が残ります。</p>`;
 
   if (!document.getElementById("board")) {
@@ -801,7 +849,7 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
   }
   const r = solve(op);
   if (s.step === "action") {
-    const warn = op.decoy != null ? `${oppName()}はおとりを仕掛けています。おとりの数字を推理して外すとペナルティが2枚です。` : "";
+    const warn = op.decoys.length ? `${oppName()}はおとりを${op.decoys.length}枚仕掛けています。おとりの数字を推理して外すと、ペナルティが増えることがあります。` : "";
     if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。${warn}数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、公開されていない別のカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>カード</b>を選んでください<small>地雷ではない、公開されていないカードから選びます。相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
@@ -818,7 +866,7 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
         return wrap(`${head}<div class="prompt"><small>数字を ${need} つ選んでください（選択中: ${sel.join("・") || "なし"}）。</small></div>${numpad("e3", op, r, sel)}<div class="btns"><button class="btn sm" data-act="e3-ok" ${sel.length === need ? "" : "disabled"}>この${need}つで聞く</button>${skip("使わない")}</div>`); }
       case 7: return wrap(`${head}<div class="prompt"><small>公開済みの数字も指定できます。</small></div>${numpad("e7", op, r, [], true)}<div class="btns">${skip("使わない")}</div>`);
       case 8: return wrap(`${head}${numpad("e8", op, r)}<div class="btns">${skip("使わない")}</div>`);
-      case 9: return wrap(`${head}<div class="prompt"><small>あなたのカードから、おとりにするカード（緑の枠）を選んでください。どれを選んだかは${oppName()}に伝わりません。</small></div><div class="btns">${skip("使わない")}</div>`);
+      case 9: return wrap(`${head}<div class="prompt"><small>あなたのカードから、おとりにするカード（緑の枠）を選んでください。どれを選んだかは${oppName()}に伝わりません。${mp.decoys.length >= MAX_DECOYS ? `すでに${MAX_DECOYS}枚あるので、古いおとり（${mp.decoys[0]}）は消えます。` : ""}</small></div><div class="btns">${skip("使わない")}</div>`);
     }
     // 旧バージョンの保存データなどで止まらないように
     return wrap(`${head}<div class="btns">${skip("閉じる")}</div>`);
@@ -952,7 +1000,7 @@ function viewForGuest(s) {
   const v = clone(s);
   if (v.phase === "over") return v;
   v.p0.mines = [];
-  if (v.p0.decoy != null) v.p0.decoy = -1;
+  v.p0.decoys = v.p0.decoys.map(() => -1); // 枚数だけ伝える
   for (const e of v.log) if (e.who === 0 && (e.k === "trump" || e.k === "decoy")) { delete e.a; delete e.b; delete e.n; }
   return v;
 }
@@ -1058,7 +1106,7 @@ function renderRules() {
     <li>表になったカードは光ります。金色は相手の公開済みカード、赤色は相手に見えている自分のカードです。</li></ul>
     <h3>ルーレットの効果</h3>
     <ul><li>1・2・4・5・6・10 はすぐに自動で発動します。3・7・8・9 は「使わない」を選んで見送ることもできます。</li>
-    <li>シールド（4）とおとり（9）は1つずつまで持てます。おとりを仕掛け直すと前のおとりは消え、おとりのカードが公開されたときも消えます。</li>
+    <li>シールド（4）は1つ、おとり（9）は2枚まで持てます。3枚目のおとりを仕掛けると古いほうが消え、おとりのカードが公開されたときも消えます。</li><li>おとりの数字を推理して外すと、外した人のカードが公開されます。おとりが踏まれた回数で枚数が決まり、1回目は1枚（通常の外れと同じ）、2回目以降は2枚です。おとりの持ち主だけ地雷が1枚判明している（外した人は0枚）ときは3枚です。ただし、外した人の地雷が確定しないよう、伏せた地雷以外のカードが残りの地雷の枚数より少なくなる分は公開しません。</li>
     <li>封印（10）された人は、次の番ルーレットを回せず、推理かパスだけになります。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
     <h3>切り札（1ゲーム1回）</h3>
