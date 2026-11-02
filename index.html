@@ -261,7 +261,7 @@ const EFFECTS = {
   4: "シールド：相手が次にあなたのヒント（2・3・5・6・7）を得るのを1回防ぐ",
   5: "相手の地雷2枚のうち、6以上が何枚あるかわかる",
   6: "相手の地雷2枚の偶奇がわかる（2枚とも偶数／2枚とも奇数／1枚ずつ）",
-  7: "数字を1つ指定し、いちばん近い相手の地雷までの差を聞く（わかるのは差2まで。それより遠ければ「3以上」）",
+  7: "数字を1つ指定し、その数字から差2以内（例：7なら5〜9）に相手の地雷があるかを聞く",
   8: "数字を1つ指名し、相手のそのカードを公開する（地雷なら判明。外れてもペナルティなし）",
   9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ。相手がその数字を推理して外したらペナルティが2枚になる",
   10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
@@ -271,8 +271,8 @@ const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
-const STATE_V = 4; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問・距離の上限なし）の保存データは読み込まない
-const DIST_CAP = 3; // 距離ヒントは差2までを答え、3以上はまとめて「3以上」
+const STATE_V = 5; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問 / v4: 距離ヒントが差を答える）の保存データは読み込まない
+const NEAR = 2; // 距離ヒントは「差2以内に地雷があるか」だけを答える
 
 // ---------- ゲームエンジン（純粋関数） ----------
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -284,8 +284,7 @@ const ep = p => p.trumpUsed ? 1 : 0;
 const bothReady = s => s.p0.ready && s.p1.ready;
 const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
 const distTo = (x, pair) => Math.min(Math.abs(x - pair[0]), Math.abs(x - pair[1]));
-const distHint = (x, pair) => Math.min(distTo(x, pair), DIST_CAP);
-const distTxt = d => d >= DIST_CAP ? "3以上" : String(d);
+const nearHint = (x, pair) => distTo(x, pair) <= NEAR;
 
 function newPlayer(uid) {
   const cards = {};
@@ -363,9 +362,9 @@ function resolveEffect(s, who, a) {
     }
     case 7: {
       const x = a.n; if (!NUMS.includes(x)) fail("数字を選んでください");
-      const d = distHint(x, op.mines);
-      op.facts.push({ t: "dist", x, d, e: ep(op) });
-      addLog(s, { k: "dist", who, x, d }); return endTurn(s);
+      const near = nearHint(x, op.mines);
+      op.facts.push({ t: "dist", x, near, e: ep(op) });
+      addLog(s, { k: "dist", who, x, near }); return endTurn(s);
     }
     case 8: {
       const n = a.n; if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
@@ -442,7 +441,7 @@ function okAt(pair, facts, e) {
     if (f.t === "cnt" && pair.filter(x => f.ns.includes(x)).length !== f.c) return false;
     if (f.t === "par" && pair.filter(x => x % 2 === 0).length !== f.ev) return false;
     if (f.t === "big" && pair.filter(x => x >= 6).length !== f.ev) return false;
-    if (f.t === "dist" && distHint(f.x, pair) !== f.d) return false;
+    if (f.t === "dist" && nearHint(f.x, pair) !== f.near) return false;
   }
   return true;
 }
@@ -525,7 +524,7 @@ function cpuDecide(s) {
       }
       case 7: {
         let best = 1, bestH = -1;
-        for (const x of NUMS) { const h = entropy(r, pair => distHint(x, pair)); if (h > bestH) { bestH = h; best = x; } }
+        for (const x of NUMS) { const h = entropy(r, pair => nearHint(x, pair)); if (h > bestH) { bestH = h; best = x; } }
         return { type: "eff", n: best };
       }
       case 8: return { type: "eff", n: hidden(op).sort((a, b) => r.prob[b] - r.prob[a])[0] };
@@ -577,7 +576,7 @@ function fmt(e, v) {
     case "cnt": return told(`${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚`, `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた`, `${W}が2枚質問をした`);
     case "big": return told(`${oppName()}の地雷は${MBIG[e.ev]}`, `あなたの地雷の大小（${MBIG[e.ev]}）を知られた`, `${W}が大小ヒントを得た`);
     case "mpar": return told(`${oppName()}の地雷は${MPAR[e.ev]}`, `あなたの地雷の偶奇（${MPAR[e.ev]}）を知られた`, `${W}が偶奇ヒントを得た`);
-    case "dist": return told(`${oppName()}の地雷のうち ${e.x} にいちばん近いものは差 ${distTxt(e.d)}`, `${e.x} からあなたの地雷までの差（${distTxt(e.d)}）を知られた`, `${W}が距離ヒントを得た`);
+    case "dist": return told(`${oppName()}の地雷は ${e.x} から差2以内に${e.near ? "ある" : "ない（3以上離れている）"}`, `${e.x} から差2以内にあなたの地雷が${e.near ? "ある" : "ない"}ことを知られた`, `${W}が距離ヒントを得た`);
     case "none": return [`${W}: 対象のカードがなく効果なし`];
     case "skip": return [`${W}は効果を使わなかった`];
     case "shield": return [`${W}がシールドを張った`];
@@ -879,7 +878,7 @@ function renderAssist(s, phase, op, mp, over) {
 }
 // p の地雷について公開されたヒント（効果2・3・5・6・7）を表示用の文字列にする
 function hintList(p) {
-  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => MBIG[f.ev], par: f => MPAR[f.ev], dist: f => `${f.x} から差 ${distTxt(f.d)}` };
+  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => MBIG[f.ev], par: f => MPAR[f.ev], dist: f => `${f.x} の差2以内に${f.near ? "あり" : "なし"}` };
   return p.facts.filter(f => txt[f.t]).map(f => txt[f.t](f) + (p.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
 }
 
