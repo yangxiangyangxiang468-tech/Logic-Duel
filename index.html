@@ -1,4 +1,7 @@
+<!doctype html>
+<html lang="ja">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ロジカル・カジノ</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,6 +29,8 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+/* .overlay などが display を指定していても hidden 属性で必ず隠れるように（GitHub Pages など素のHTMLで開いたとき用） */
+[hidden] { display: none !important; }
 html, body { min-height: 100%; }
 body {
   background: radial-gradient(1200px 600px at 30% -10%, #2a1419 0%, var(--bg) 60%) var(--bg);
