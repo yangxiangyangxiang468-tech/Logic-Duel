@@ -42,7 +42,7 @@ body {
 }
 button { font: inherit; color: inherit; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
-.app { max-width: 1240px; margin: 0 auto; padding-block: 16px 40px; display: grid; gap: 16px; }
+.app { max-width: 1480px; margin: 0 auto; padding-block: 16px 40px; display: grid; gap: 16px; }
 
 /* header */
 .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
@@ -63,8 +63,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); out
 .btn.sm { padding: 5px 10px; font-size: 13px; }
 
 /* board */
-.board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 350px); gap: 16px; align-items: start; }
-@media (max-width: 920px) { .board { grid-template-columns: minmax(0, 1fr); } }
+/* 盤面の配置：狭い画面は縦に1列（盤面 → 推理アシスト → 記録）、パソコンは3列（記録｜盤面｜推理アシスト）。
+   スマホの横向きは2列で、右の列を「推理アシスト／記録」のタブで切り替える（下のメディアクエリ） */
+.board { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "felt" "side" "log"; gap: 16px; align-items: start; }
+.felt { grid-area: felt; }
+.side { grid-area: side; }
+.logcol { grid-area: log; }
+.tabs { display: none; }
+@media (min-width: 921px) {
+  .board { grid-template-columns: minmax(200px, 270px) minmax(0, 1fr) minmax(280px, 340px); grid-template-areas: "log felt side"; }
+}
 .felt {
   background: radial-gradient(ellipse at 50% 45%, var(--felt-hi) 0%, var(--felt) 70%);
   border: 1px solid var(--brass-dim);
@@ -148,11 +156,11 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 
 /* side */
 .side { display: grid; gap: 16px; min-width: 0; }
-/* 広い画面ではサイドを画面の高さに収め、残りの高さを記録に使う（記録の中だけスクロール） */
+/* パソコンでは左の記録と右の推理アシストを画面の高さに固定し、記録は列の高さいっぱいを使う（記録の中だけスクロール） */
 @media (min-width: 921px) {
-  .side { position: sticky; top: 16px; max-height: calc(100vh - 32px); grid-template-rows: auto auto minmax(0, 1fr); overflow-y: auto; }
-  .logbox { min-height: 140px; grid-template-rows: auto minmax(0, 1fr); }
-  .logbox .log { max-height: none; }
+  .side { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .logcol { position: sticky; top: 16px; height: calc(100vh - 32px); grid-template-rows: auto minmax(0, 1fr); }
+  .logcol .log { max-height: none; }
 }
 .box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
 .box h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 17px; letter-spacing: .1em; color: var(--brass); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
@@ -259,7 +267,13 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
   body { font-size: 13px; padding-inline: max(8px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-right, 0px)); }
   .app { padding-block: 6px 12px; gap: 8px; }
   .brand h1 { font-size: 20px; }
-  .board { grid-template-columns: minmax(0, 1fr) minmax(0, 270px); gap: 8px; }
+  .board { grid-template-columns: minmax(0, 1fr) minmax(0, 270px); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "felt tabs" "felt pane"; gap: 6px 8px; }
+  .felt { grid-row: 1 / span 2; }
+  .tabs { grid-area: tabs; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .tabs button { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 8px; padding: 4px 0; font-size: 12px; cursor: pointer; }
+  .tabs button.on { border-color: var(--brass); color: var(--brass); }
+  .side, .logcol { grid-area: pane; }
+  .board[data-tab="log"] .side, .board:not([data-tab="log"]) .logcol { display: none; }
   .felt { padding: 8px 10px; gap: 6px; border-radius: 14px; }
   .seat { gap: 4px; }
   .seat-name { font-size: 14px; }
@@ -276,11 +290,11 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
   .numpad { gap: 4px; }
   .numpad button { padding: 3px 0 2px; }
   .numpad button b { font-size: 17px; }
-  .side { position: sticky; top: 6px; max-height: calc(100vh - 12px); grid-template-rows: auto auto minmax(0, 1fr); overflow-y: auto; gap: 8px; }
+  .side { position: sticky; top: 6px; max-height: calc(100vh - 48px); overflow-y: auto; gap: 8px; }
   .box { padding: 8px 10px; gap: 6px; border-radius: 10px; }
   .box h2 { font-size: 14px; }
-  .logbox { min-height: 100px; grid-template-rows: auto minmax(0, 1fr); }
-  .logbox .log { max-height: none; }
+  .logcol { position: sticky; top: 6px; height: calc(100vh - 48px); grid-template-rows: auto minmax(0, 1fr); }
+  .logcol .log { max-height: none; }
   .prow2 .n { font-size: 14px; }
   .bar { height: 15px; }
   .bar em, .bar .pv { line-height: 15px; font-size: 9.5px; }
@@ -360,7 +374,8 @@ function newPlayer(uid) {
 function newGame(mode, uid0, uid1) {
   return { v: STATE_V, mode, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
 }
-function addLog(s, e) { e.t = s.turnNo; s.log.push(e); if (s.log.length > 90) s.log.splice(0, s.log.length - 90); }
+const LOG_MAX = 400; // 1試合ぶんを最初から見返せる量
+function addLog(s, e) { e.t = s.turnNo; s.log.push(e); if (s.log.length > LOG_MAX) s.log.splice(0, s.log.length - LOG_MAX); }
 function fail(msg) { const e = new Error(msg); e.user = true; throw e; }
 
 function reveal(s, owner, n, cause) {
@@ -853,18 +868,21 @@ function renderGame() {
   if (!document.getElementById("board")) {
     $("#main").innerHTML = `
   <div class="board" id="board">
+    <section class="box logcol"><h2>記録</h2><div class="log" id="log"></div></section>
     <section class="felt" aria-label="テーブル">
       <div class="seat" id="oppSeat"></div>
       <div class="center">${buildWheel()}<div id="panel"></div></div>
       <div class="seat" id="mySeat"></div>
     </section>
+    <div class="tabs" id="tabs"></div>
     <aside class="side">
       <div id="fxlist"></div>
       <div id="assist"></div>
-      <section class="box logbox"><h2>記録</h2><div class="log" id="log"></div></section>
     </aside>
   </div>`;
   }
+  $("#board").dataset.tab = sideTab;
+  $("#tabs").innerHTML = [["assist", "推理アシスト"], ["log", "記録"]].map(([k, label]) => `<button class="${sideTab === k ? "on" : ""}" data-act="tab" data-tab="${k}">${label}</button>`).join("");
   const opp = $("#oppSeat"), mine = $("#mySeat");
   opp.className = "seat" + (phase === "play" && s.turn === o ? " turn" : "");
   mine.className = "seat" + (phase === "play" && s.turn === mySeat ? " turn" : "");
@@ -939,6 +957,8 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
 }
 
 // 回転中は結果を先に見せないよう、止まってから直前の目を光らせる
+// スマホ横向きの右列で見ているタブ（"assist" | "log"）。見る人ごとの好みなので localStorage に保存
+let sideTab = load("lc_side_tab") === "log" ? "log" : "assist";
 // 折りたたみ状態は見る人ごとの好みなので localStorage に保存（既定は開く）
 let fxOpen = load("lc_fx_open") ?? true;
 function renderFx(s, busy) {
@@ -1189,6 +1209,7 @@ document.addEventListener("click", ev => {
   const a = el.dataset.act, n = Number(el.dataset.n);
   switch (a) {
     case "rules": return renderRules();
+    case "tab": sideTab = el.dataset.tab === "log" ? "log" : "assist"; store("lc_side_tab", sideTab); return render();
     case "landscape": {
       (async () => {
         try { await document.documentElement.requestFullscreen(); await screen.orientation.lock("landscape"); }
