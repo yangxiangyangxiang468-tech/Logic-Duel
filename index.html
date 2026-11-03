@@ -251,6 +251,7 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .pickgrid button span { font-size: 10.5px; }
 .pickgrid button:hover:not([disabled]) { box-shadow: 0 0 0 2px var(--brass); }
 .pickgrid button[disabled] { opacity: .3; cursor: not-allowed; }
+.netwarn small { color: var(--danger); }
 .modetag { font-size: 12px; color: var(--danger); border: 1px solid var(--danger); border-radius: 999px; padding: 2px 10px; align-self: center; }
 .note b { font-family: var(--f-num); color: var(--brass); }
 .splash { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 25; width: min(360px, calc(100% - 32px)); background: var(--panel); border: 2px solid var(--brass); border-radius: 18px; padding: 18px 24px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 30px rgba(214,173,87,.35); pointer-events: none; animation: pop .25s ease-out; }
@@ -818,6 +819,7 @@ function renderStart() {
   const saved = load("lc_game");
   const p2p = !!window.Peer;
   const lastCode = load("lc_room");
+  const resume = loadResume();
   $("#main").innerHTML = `
   <section class="start">
     <div class="hero">
@@ -834,7 +836,8 @@ function renderStart() {
       <div class="mode">
         <h3>オンライン対戦</h3>
         <p>部屋を作って4文字の部屋コードを相手に伝えます。相手は同じページを開いてコードを入力します。アカウントは不要です。</p>
-        <p class="note">${p2p ? "部屋を作った人がページを閉じると部屋はなくなります。学校や会社のネットワークではつながらないことがあります。" : "通信ライブラリを読み込めなかったため、オンライン対戦は使えません。"}</p>
+        <p class="note">${p2p ? "ページを閉じても、同じブラウザで開き直せば「前回のオンライン対戦に戻る」で続きから遊べます。学校や会社のネットワークではつながらないことがあります。" : "通信ライブラリを読み込めなかったため、オンライン対戦は使えません。"}</p>
+        ${p2p && resume ? `<div class="btns"><button class="btn" data-act="resume-online">前回のオンライン対戦に戻る（部屋 ${esc(resume.code)}・${resume.role === "host" ? "自分が作った部屋" : "参加した部屋"}）</button></div>` : ""}
         <div class="btns"><button class="btn" data-act="online-create" ${p2p ? "" : "disabled"}>部屋を作る（普通）</button><button class="btn ghost" data-act="online-create" data-rule="gachi" ${p2p ? "" : "disabled"}>部屋を作る（ガチ）</button></div>
         <div class="join"><input id="joinCode" maxlength="4" placeholder="コード" autocomplete="off" value="${esc(lastCode || "")}" aria-label="部屋コード"><button class="btn ghost" data-act="online-join" ${p2p ? "" : "disabled"}>参加する</button></div>
       </div>
@@ -956,7 +959,10 @@ function numpad(kind, op, r, sel = [], all = false) {
 }
 
 function renderPanel(s, phase, busy, myTurn, over, op, mp) {
-  const wrap = inner => `<div class="panel">${inner}</div>`;
+  // オンラインで相手（参加側から見れば部屋）との接続が切れているあいだは、パネルの上に知らせる
+  const net = s.mode === "online" && online.role && !online.conn?.open && (online.role === "guest" || s.p1.uid)
+    ? `<div class="prompt netwarn"><small>${online.role === "guest" ? "部屋との接続が切れています。自動で再接続しています…" : "相手との接続が切れています。相手が戻るのを待っています。"}</small></div>` : "";
+  const wrap = inner => `<div class="panel">${net}${inner}</div>`;
   const waitJoin = s.mode === "online" && phase === "setup" && !s.p1.uid
     ? `<div class="prompt">部屋コード<small>相手にこのコードを伝えてください。相手はこのページを開き「参加する」に入力します。</small></div><div class="btns" style="align-items:center"><span class="code">${esc(online.code || "")}</span><button class="btn ghost sm" data-act="copy-code">コピー</button></div>` : "";
   if (phase === "setup") {
@@ -1142,7 +1148,22 @@ function viewForGuest(s) {
   for (const e of v.log) if (e.who === 0 && (e.k === "trump" || e.k === "decoy")) { delete e.a; delete e.b; delete e.n; }
   return v;
 }
-function sendState() { if (online.role === "host" && online.conn?.open) online.conn.send({ t: "state", s: viewForGuest(S) }); }
+// ページを閉じても戻れるように、部屋を作った側は対戦の状態ごと、参加した側は部屋コードだけをブラウザに保存する
+const RESUME_TTL = 12 * 3600e3;
+function saveOnline() {
+  if (online.role === "host" && S?.mode === "online") store("lc_online", { role: "host", code: online.code, S, at: Date.now() });
+  else if (online.role === "guest") store("lc_online", { role: "guest", code: online.code, at: Date.now() });
+}
+function loadResume() {
+  const r = load("lc_online");
+  if (!r || !r.code || Date.now() - r.at > RESUME_TTL) return null;
+  if (r.role === "host" && r.S?.v !== STATE_V) return null;
+  return r;
+}
+function sendState() {
+  saveOnline();
+  if (online.role === "host" && online.conn?.open) online.conn.send({ t: "state", s: viewForGuest(S) });
+}
 function newRound() {
   lastSpinId = null;
   commit(newGame("online", "host", online.conn?.open ? "guest" : null, S.rule));
@@ -1151,10 +1172,25 @@ function newRound() {
 function createRoom(rule = "normal") {
   if (!window.Peer) return toast("通信の準備ができていません");
   leaveOnline();
-  const code = genCode(), peer = new Peer(PEER_PREFIX + code);
+  openHost(genCode(), rule, null, 0);
+}
+// 閉じる前の部屋を、同じコード・同じ対戦の状態で開き直す
+function resumeHost(r) {
+  if (!window.Peer) return toast("通信の準備ができていません");
+  leaveOnline();
+  S = r.S; me = 0; screen = "game"; lastSpinId = null;
+  ui = S.phase === "setup" && !S.p0.ready ? { setupSel: [] } : {};
+  render();
+  openHost(r.code, S.rule, r.S, 0);
+}
+function openHost(code, rule, resume, tries) {
+  const peer = new Peer(PEER_PREFIX + code);
   Object.assign(online, { peer, role: "host", code });
   peer.on("open", () => {
-    S = newGame("online", "host", null, rule); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null; render();
+    if (online.peer !== peer) return;
+    if (resume) { saveOnline(); render(); return toast(S.p1.uid ? "部屋を開き直しました。相手が戻るのを待っています" : "部屋を開き直しました"); }
+    S = newGame("online", "host", null, rule); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null;
+    saveOnline(); render();
   });
   peer.on("connection", c => {
     // 対戦できるのは1人だけ。つながっている相手がいれば断る
@@ -1165,12 +1201,20 @@ function createRoom(rule = "normal") {
       toast("相手が参加しました"); render(); sendState();
     });
     c.on("data", onGuestData);
-    c.on("close", () => { if (online.conn !== c) return; online.conn = null; toast("相手との接続が切れました。相手は同じコードで再参加できます。"); render(); });
+    c.on("close", () => { if (online.conn !== c) return; online.conn = null; toast("相手との接続が切れました。相手は自動で戻ってきます。"); render(); });
   });
   // 仲介サーバーとの接続だけ切れた場合は、再参加を受け付けられるようにつなぎ直す
   peer.on("disconnected", () => { if (!peer.destroyed) peer.reconnect(); });
   peer.on("error", e => {
-    if (e.type === "unavailable-id") return createRoom(rule); // コードが使用中なら別のコードで作り直す
+    if (online.peer !== peer) return;
+    if (e.type === "unavailable-id") {
+      try { peer.destroy(); } catch (x) {}
+      if (!resume) return openHost(genCode(), rule, null, 0); // コードが使用中なら別のコードで作り直す
+      // 閉じる前の接続が仲介サーバーにまだ残っている。消えるまで3秒おきに開き直す（最大2分）
+      if (tries >= 40) return toast("部屋を開き直せませんでした。少し待ってから、トップの「前回のオンライン対戦に戻る」で試してください");
+      if (tries === 0) toast("前の接続が切れるのを待っています…");
+      return setTimeout(() => { if (online.peer === peer) openHost(code, rule, resume, tries + 1); }, 3000);
+    }
     console.error(e); toast(peerErr(e));
   });
 }
@@ -1192,7 +1236,8 @@ function onGuestData(msg) {
   }
   if (msg.t === "again" && S.phase === "over") return newRound();
 }
-function joinRoom(code) {
+// retry > 0 は自動の再接続。部屋がまだ戻っていなくても、静かに試し続ける
+function joinRoom(code, retry = 0) {
   code = (code || "").trim().toUpperCase();
   if (!/^[A-Z0-9]{4}$/.test(code)) return toast("4文字の部屋コードを入力してください");
   if (!window.Peer) return toast("通信の準備ができていません");
@@ -1200,18 +1245,30 @@ function joinRoom(code) {
   store("lc_room", code);
   const peer = new Peer();
   Object.assign(online, { peer, role: "guest", code });
-  toast("接続しています…");
+  if (!retry) toast("接続しています…");
   peer.on("open", () => {
     const c = peer.connect(PEER_PREFIX + code, { reliable: true });
     online.conn = c;
+    c.on("open", () => { saveOnline(); if (retry) toast("部屋に戻りました"); });
     c.on("data", onHostData);
-    c.on("close", () => { if (online.conn !== c) return; online.conn = null; toast("部屋との接続が切れました。もう一度「参加する」で戻れます。"); render(); });
+    c.on("close", () => { if (online.conn !== c) return; online.conn = null; rejoinLater(code, 0); });
   });
   peer.on("error", e => {
+    if (online.peer !== peer) return;
+    if (retry) return rejoinLater(code, retry);
     console.error(e);
-    toast(e.type === "peer-unavailable" ? `部屋 ${code} が見つかりません。コードと、作った人がページを開いたままかを確認してください。` : peerErr(e));
+    toast(e.type === "peer-unavailable" ? `部屋 ${code} が見つかりません。コードと、作った人がページを開いているかを確認してください。` : peerErr(e));
     if (screen === "start") leaveOnline();
   });
+}
+// 参加側：切れたら3秒おきに最大5分つなぎ直す（部屋を作った人がページを開き直すのを待つ）
+const REJOIN_TRIES = 100;
+function rejoinLater(code, n) {
+  if (n === 0) toast("部屋との接続が切れました。自動で再接続しています…");
+  if (n >= REJOIN_TRIES) { toast("部屋に戻れませんでした。トップの「前回のオンライン対戦に戻る」からもう一度試せます"); return render(); }
+  render();
+  const peer = online.peer;
+  setTimeout(() => { if (online.role === "guest" && online.code === code && online.peer === peer) joinRoom(code, n + 1); }, 3000);
 }
 function onHostData(msg) {
   if (online.role !== "guest") return;
@@ -1274,11 +1331,12 @@ document.addEventListener("click", ev => {
       return;
     }
     case "close-rules": $("#rules").hidden = true; return;
-    case "home": clearTimeout(cpuTimer); $("#splash").hidden = true; leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
+    case "home": clearTimeout(cpuTimer); $("#splash").hidden = true; if (S?.mode === "online") store("lc_online", null); leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
     case "mode-cpu": return startCpu(el.dataset.rule === "gachi" ? "gachi" : "normal");
     case "resume-cpu": { const g = load("lc_game"); if (!g || g.v !== STATE_V) return startCpu(); leaveOnline(); S = g; me = 0; ui = {}; screen = "game"; lastSpinId = null; render(); return scheduleCpu(); }
     case "online-create": return createRoom(el.dataset.rule === "gachi" ? "gachi" : "normal");
     case "online-join": return joinRoom($("#joinCode").value);
+    case "resume-online": { const r = loadResume(); if (!r) return render(); return r.role === "host" ? resumeHost(r) : joinRoom(r.code); }
     case "copy-code": {
       const code = online.code || "";
       try { navigator.clipboard.writeText(code).then(() => toast("コピーしました"), () => toast("コード: " + code)); } catch (e) { toast("コード: " + code); }
