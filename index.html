@@ -357,7 +357,7 @@ const EFFECTS = {
   4: "シールド：相手が次にあなたのヒント（2・3・5・6・7）を得るのを1回防ぐ",
   5: "相手の地雷2枚のうち、6以上が何枚あるかわかる",
   6: "相手の地雷2枚の偶奇がわかる（2枚とも偶数／2枚とも奇数／1枚ずつ）",
-  7: "数字を1つ指定し、その数字から差2以内（例：7なら5〜9）に相手の地雷があるかを聞く",
+  7: "数字を1つ指定し、その数字から差2以内（例：7なら5〜9）に相手の地雷があるかを聞く（すでに判明した地雷は数えない）",
   8: "数字を1つ指名し、相手のそのカードを公開する（地雷なら判明。外れてもペナルティなし）",
   9: "おとり：自分の地雷ではないカード1枚をこっそり選ぶ（最大2枚まで）。相手がその数字を推理して外すと、相手のカードが公開される（1回目1枚、2回目以降2枚）",
   10: "封印：相手は次の番、ルーレットを回せない（推理かパスだけ）",
@@ -367,7 +367,7 @@ const HINT_EFFECTS = [2, 3, 5, 6, 7]; // シールドで防げる効果
 const MPAR = ["2枚とも奇数", "偶数と奇数が1枚ずつ", "2枚とも偶数"]; // 地雷のうち偶数の枚数 → 表示
 const MBIG = ["2枚とも5以下", "5以下と6以上が1枚ずつ", "2枚とも6以上"]; // 地雷のうち6以上の枚数 → 表示
 const PAIRS = []; for (let a = 1; a <= 10; a++) for (let b = a + 1; b <= 10; b++) PAIRS.push([a, b]);
-const STATE_V = 7; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問 / v4: 距離ヒントが差を答える / v5: おとり1枚 / v6: ガチモードなし）の保存データは読み込まない
+const STATE_V = 8; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし / v3: 3枚質問 / v4: 距離ヒントが差を答える / v5: おとり1枚 / v6: ガチモードなし / v7: 距離ヒントが判明済みの地雷も数える）の保存データは読み込まない
 const MAX_DECOYS = 2;
 const NEAR = 2; // 距離ヒントは「差2以内に地雷があるか」だけを答える
 
@@ -418,8 +418,8 @@ const isMine = (p, n) => p.mines.includes(n);
 const ep = p => p.trumpCount ?? (p.trumpUsed ? 1 : 0); // 切り札を何回使ったか（ヒントがいつの情報か）
 const bothReady = s => s.p0.ready && s.p1.ready;
 const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
-const distTo = (x, pair) => Math.min(Math.abs(x - pair[0]), Math.abs(x - pair[1]));
-const nearHint = (x, pair) => distTo(x, pair) <= NEAR;
+// 距離ヒント：x から差 NEAR 以内に、まだ判明していない地雷があるか（found = 聞いた時点で判明していた地雷）
+const nearHint = (x, mines, found = []) => mines.some(m => !found.includes(m) && Math.abs(x - m) <= NEAR);
 
 function newPlayer(uid) {
   const cards = {};
@@ -530,8 +530,8 @@ function resolveEffect(s, who, a) {
     }
     case 7: {
       const x = a.n; if (!numsOf(op).includes(x)) fail("数字を選んでください");
-      const near = isChaos(s) ? op.mines.some(m => Math.abs(x - m) <= NEAR) : nearHint(x, op.mines); // ハチャメチャは地雷が何枚でも全部を見る
-      op.facts.push({ t: "dist", x, near, e: ep(op) });
+      const near = nearHint(x, op.mines, op.found);
+      op.facts.push({ t: "dist", x, near, found: [...op.found], e: ep(op) });
       addLog(s, { k: "dist", who, x, near }); return endTurn(s);
     }
     case 8: {
@@ -629,7 +629,7 @@ function okAt(pair, facts, e) {
     if (f.t === "cnt" && pair.filter(x => f.ns.includes(x)).length !== f.c) return false;
     if (f.t === "par" && pair.filter(x => x % 2 === 0).length !== f.ev) return false;
     if (f.t === "big" && pair.filter(x => x >= 6).length !== f.ev) return false;
-    if (f.t === "dist" && nearHint(f.x, pair) !== f.near) return false;
+    if (f.t === "dist" && nearHint(f.x, pair, f.found) !== f.near) return false;
   }
   return true;
 }
@@ -673,7 +673,7 @@ function okAtChaos(c, facts, e, p) {
     if (f.t === "cnt" && c.filter(x => f.ns.includes(x)).length !== f.c) return false;
     if (f.t === "par" && c.filter(x => x % 2 === 0).length !== f.ev) return false;
     if (f.t === "big" && c.filter(x => x >= bigOf(p)).length !== f.ev) return false;
-    if (f.t === "dist" && !c.some(m => Math.abs(f.x - m) <= NEAR) !== !f.near) return false;
+    if (f.t === "dist" && nearHint(f.x, c, f.found) !== f.near) return false;
   }
   return true;
 }
@@ -725,12 +725,25 @@ function cpuPickEffect(s) {
     4: me.shield ? 0 : .2 + exposed * 2,
     5: blocked * entropy(r, p => p.filter(x => x >= bigOf(op)).length),
     6: blocked * entropy(r, p => p.filter(x => x % 2 === 0).length),
-    7: blocked * best(numsOf(op), x => entropy(r, p => isChaos(s) ? p.some(m => Math.abs(x - m) <= NEAR) : nearHint(x, p))),
+    7: blocked * best(numsOf(op), x => entropy(r, p => nearHint(x, p, op.found))),
     8: best(hid, x => entropy(r, p => p.includes(x)) + r.prob[x] * .8),
     9: me.decoys.length >= MAX_DECOYS ? .05 : .15 + exposed * 1.5,
     10: op.sealed ? 0 : .25 + exposed,
   };
   return effectsOn(s).filter(n => !me.used.includes(n) && hintOk(s, me, n)).sort((a, b) => value[b] - value[a])[0];
+}
+// ハチャメチャ用：効果 n を使うと相手の地雷の候補がどれだけ絞れるか（0 なら何もわからない）
+function chaosInfo(s, n, r) {
+  const op = s.p0, hid = hidden(op);
+  switch (n) {
+    case 1: case 8: return hid.length ? 1 : 0;
+    case 2: return entropy(r, p => p.reduce((a, b) => a + b, 0));
+    case 3: return Math.max(0, ...hid.flatMap((x, i) => hid.slice(i + 1).map(y => entropy(r, p => p.filter(z => z === x || z === y).length))));
+    case 5: return entropy(r, p => p.filter(x => x >= bigOf(op)).length);
+    case 6: return entropy(r, p => p.filter(x => x % 2 === 0).length);
+    case 7: return Math.max(0, ...numsOf(op).map(x => entropy(r, p => nearHint(x, p, op.found))));
+  }
+  return 0;
 }
 function cpuDecide(s) {
   const me = s.p1, op = s.p0;
@@ -758,8 +771,8 @@ function cpuDecide(s) {
     if (pb >= 0.5 || r.count <= 2 || bold) return { type: "guess", n: best };
     if (me.sealed) return pb >= 0.25 ? { type: "guess", n: best } : { type: "pass" };
     if (isPick(s) && !isChaos(s)) return { type: "pick", n: cpuPickEffect(s) };
-    // ハチャメチャで情報が得られる効果（公開・ヒント）が残っていなければ、守りの効果を回し続けずに推理する
-    if (isChaos(s) && !effectsOn(s).some(n => [1, 2, 3, 5, 6, 7, 8].includes(n) && hintOk(s, me, n))) return { type: "guess", n: best };
+    // ハチャメチャで、残っている効果ではもう候補が絞れない（守りの効果しかない、同じヒントを聞き直すだけ）なら推理する
+    if (isChaos(s) && !effectsOn(s).some(n => hintOk(s, me, n) && chaosInfo(s, n, r) > 1e-9)) return { type: "guess", n: best };
     if (isPick(s)) { const n = cpuPickEffect(s); return n == null ? { type: "guess", n: best } : { type: "pick", n }; }
     return { type: "spin" };
   }
@@ -778,7 +791,7 @@ function cpuDecide(s) {
       }
       case 7: {
         let best = 1, bestH = -1;
-        for (const x of numsOf(op)) { const h = entropy(r, pair => isChaos(s) ? pair.some(m => Math.abs(x - m) <= NEAR) : nearHint(x, pair)); if (h > bestH) { bestH = h; best = x; } }
+        for (const x of numsOf(op)) { const h = entropy(r, pair => nearHint(x, pair, op.found)); if (h > bestH) { bestH = h; best = x; } }
         return { type: "eff", n: best };
       }
       case 8: return { type: "eff", n: hidden(op).sort((a, b) => r.prob[b] - r.prob[a])[0] };
