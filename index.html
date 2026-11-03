@@ -243,6 +243,57 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .splash .desc { font-size: 13px; margin-top: 4px; }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, -50%) scale(.85); } }
 @media (prefers-reduced-motion: reduce) { .splash { animation: none; } }
+
+/* スマホは横向き専用：縦向きのあいだは案内を出してゲームを隠す（ページから向きを固定できない端末が多いため） */
+.rotate { display: none; }
+@media (orientation: portrait) and (pointer: coarse) and (max-width: 600px) {
+  .rotate { position: fixed; inset: 0; z-index: 28; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px; text-align: center; background: var(--bg); }
+  .app { visibility: hidden; }
+}
+.rotate svg { width: 84px; height: 84px; color: var(--brass); }
+.rotate p { margin: 0; font-size: 17px; color: var(--ivory); }
+.rotate small { color: var(--muted); font-size: 13px; }
+
+/* 横向きのスマホ：高さが低いので全体を詰める。サイド列は残して画面の高さに収める */
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 500px) {
+  body { font-size: 13px; padding-inline: max(8px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-right, 0px)); }
+  .app { padding-block: 6px 12px; gap: 8px; }
+  .brand h1 { font-size: 20px; }
+  .board { grid-template-columns: minmax(0, 1fr) minmax(0, 270px); gap: 8px; }
+  .felt { padding: 8px 10px; gap: 6px; border-radius: 14px; }
+  .seat { gap: 4px; }
+  .seat-name { font-size: 14px; }
+  .chip { font-size: 10.5px; padding: 1px 7px; }
+  .cards { gap: 4px; min-height: 46px; }
+  .card { width: 32px; height: 46px; font-size: 18px; border-radius: 5px; }
+  .card .tag { font-size: 8px; }
+  .card.mine::after, .card.found::after { font-size: 8px; bottom: -6px; }
+  .center { grid-template-columns: auto minmax(0, 1fr); justify-items: stretch; gap: 10px; padding-block: 4px; }
+  .wheel { width: 104px; height: 104px; }
+  .panel { padding: 8px 10px; gap: 6px; }
+  .prompt { font-size: 13.5px; }
+  .btn { padding: 6px 12px; }
+  .numpad { gap: 4px; }
+  .numpad button { padding: 3px 0 2px; }
+  .numpad button b { font-size: 17px; }
+  .side { position: sticky; top: 6px; max-height: calc(100vh - 12px); grid-template-rows: auto auto minmax(0, 1fr); overflow-y: auto; gap: 8px; }
+  .box { padding: 8px 10px; gap: 6px; border-radius: 10px; }
+  .box h2 { font-size: 14px; }
+  .logbox { min-height: 100px; grid-template-rows: auto minmax(0, 1fr); }
+  .logbox .log { max-height: none; }
+  .prow2 .n { font-size: 14px; }
+  .bar { height: 15px; }
+  .bar em, .bar .pv { line-height: 15px; font-size: 9.5px; }
+  .lg-i { grid-template-columns: 48px minmax(0, 1fr); font-size: 12px; }
+  .splash { top: 50%; padding: 10px 16px; }
+  .splash .num { font-size: 44px; }
+  .start { gap: 12px; }
+  .hero h2 { font-size: 30px; }
+  .fan { display: none; }
+  .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .mode { padding: 12px; gap: 8px; }
+  .sheet { max-height: 92vh; padding: 14px; }
+}
 </style>
 
 <div class="app">
@@ -255,6 +306,12 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 <div class="overlay" id="rules" hidden></div>
 <div class="toast" id="toast" hidden></div>
 <div class="splash" id="splash" hidden></div>
+<div class="rotate" role="alert">
+  <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="22" width="48" height="26" rx="5"/><path d="M15 12a24 24 0 0 1 29-2"/><path d="M45 4v7h-7"/></svg>
+  <p>スマホを横向きにしてください</p>
+  <small>このゲームは横画面で遊びます</small>
+  <button class="btn" data-act="landscape" id="lockBtn" hidden>全画面で横向きにする</button>
+</div>
 
 <!-- オンライン対戦：ブラウザ同士の直接通信（WebRTC）。接続の仲介は PeerJS の無料サーバー -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
@@ -1132,6 +1189,13 @@ document.addEventListener("click", ev => {
   const a = el.dataset.act, n = Number(el.dataset.n);
   switch (a) {
     case "rules": return renderRules();
+    case "landscape": {
+      (async () => {
+        try { await document.documentElement.requestFullscreen(); await screen.orientation.lock("landscape"); }
+        catch (e) { toast("自動では横向きにできませんでした。スマホを横に回してください"); }
+      })();
+      return;
+    }
     case "close-rules": $("#rules").hidden = true; return;
     case "home": clearTimeout(cpuTimer); $("#splash").hidden = true; leaveOnline(); screen = "start"; S = null; spinBusyUntil = 0; return render();
     case "mode-cpu": return startCpu();
@@ -1194,6 +1258,8 @@ document.addEventListener("keydown", ev => {
 
 // ---------- 起動 ----------
 function start(data) {
+  // 全画面＋向きの固定ができる端末（Android の Chrome など）だけ、縦向きの案内にボタンを出す
+  $("#lockBtn").hidden = !(document.documentElement?.requestFullscreen && window.screen?.orientation?.lock);
   if (data && data.S && data.S.v === STATE_V && data.S.mode === "cpu" && data.screen === "game") {
     S = data.S; me = 0; ui = {}; screen = "game";
   }
