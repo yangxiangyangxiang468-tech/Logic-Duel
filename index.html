@@ -474,12 +474,12 @@ function penalty(s, who, cause = "penalty") {
   if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
   reveal(s, who, rnd(pool), cause);
 }
-// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを1枚公開する（CPU同士の対戦で先攻勝率: 普通 約49% / ガチ 約53%）。
-// ガチは以前2枚だったが、切り札後の推理を重み付けで直してから2枚だと後攻有利（約46%）になったので1枚に戻した。
+// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを公開する。普通ルールは1枚、ガチモードは効果を選べる分
+// 先攻が有利なので2枚（切り札のはったり導入後、CPU同士の対戦で先攻勝率: 普通 約51% / ガチ 1枚だと約58% → 2枚で約53%）。
 // オンラインでは両者の準備完了を別々のクライアントが書くので、先攻の最初の操作（act）で一度だけ行う
 function startPlay(s) {
   s.phase = "play";
-  if (!s.handicap) { s.handicap = true; penalty(s, 0, "handicap"); }
+  if (!s.handicap) { s.handicap = true; for (let i = 0; i < (s.rule === "gachi" ? 2 : 1); i++) penalty(s, 0, "handicap"); }
 }
 // 封印は「封印された人の次の番」だけ効くので、その人の番が終わるときに解く。
 // ハチャメチャで1つの番に複数回行動できるときは、残りがあれば番を続ける（force = パスなどで番を終える）
@@ -557,6 +557,12 @@ function act(s0, who, a) {
     case "trump": {
       if (s.step !== "action") fail("切り札は自分の番の最初に使えます");
       if (trumpsLeft(s, me) <= 0) fail("切り札はもう使いました");
+      if (a.stay) { // はったり：地雷は移さず、「使った」ことだけ伝える（推理アシストは移さなかった可能性も数える）
+        if (isChaos(s)) { me.swaps.push(numsOf(me).filter(n => !C(me, n).r && !me.found.includes(n))); me.trumpCount++; }
+        else { me.swapUnrev = NUMS.filter(n => !C(me, n).r && !me.found.includes(n)); me.trumpUsed = true; }
+        addLog(s, { k: "trump", who, stay: true });
+        break;
+      }
       if (!me.mines.includes(a.a) || me.found.includes(a.a)) fail("判明していない地雷を選んでください");
       if (C(me, a.b)?.r !== false || isMine(me, a.b)) fail("地雷ではない、公開されていないカードを選んでください");
       if (isChaos(s)) { me.swaps.push(numsOf(me).filter(n => !C(me, n).r && !me.found.includes(n))); me.trumpCount++; }
@@ -636,6 +642,8 @@ function okAt(pair, facts, e) {
 // 切り札は「読まれかけた地雷を、疑われていないカードへ逃がす」ために使われる。そこで、切り札の時点で
 // 相手から見て地雷っぽかった地雷ほど移された、移し先は地雷っぽくなかったカードほど選ばれた、と重み付けする。
 // （一様に扱うと、切り札の後に表示64%の数字が実際は36%しか地雷でないなど高く出すぎていた。この重みでほぼ一致）
+// 切り札を使ったとき、実は地雷を移していない（はったり）とみなす割合。CPU のはったりの頻度と同じにしている
+const TRUMP_STAY = 0.25;
 function trumpWeights(as, bs, prob) {
   const sa = as.reduce((t, a) => t + prob[a], 0);
   const vb = b => (1 - prob[b]) ** 3, sb = bs.reduce((t, b) => t + vb(b), 0);
@@ -656,13 +664,14 @@ function solve(p) {
     const prob0 = {}; for (const n of NUMS) prob0[n] = 0;
     for (const p0 of pre) for (const x of p0) prob0[x] += 1 / pre.length;
     for (const p0 of pre) {
+      if (okAt(p0, facts, 1)) add(p0, TRUMP_STAY); // 移さなかった（はったり）
       const as = p0.filter(x => !found0.includes(x));
       const bs = (p.swapUnrev || []).filter(x => !p0.includes(x));
       if (!as.length || !bs.length) continue;
       const [wa, wb] = trumpWeights(as, bs, prob0);
       for (const a of as) for (const b of bs) {
         const p1 = p0.map(x => x === a ? b : x).sort((x, y) => x - y);
-        if (okAt(p1, facts, 1)) add(p1, wa(a) * wb(b));
+        if (okAt(p1, facts, 1)) add(p1, (1 - TRUMP_STAY) * wa(a) * wb(b));
       }
     }
   }
@@ -697,15 +706,15 @@ function solveChaos(p) {
     for (const n of numsOf(p)) prev[n] = 0;
     for (const [c, w] of W.values()) { tot += w; for (const x of c) prev[x] += w; }
     for (const n of numsOf(p)) prev[n] = tot ? prev[n] / tot : 0;
+    const put = (c2, w2) => { const key = c2.join("-"), cur = next.get(key); next.set(key, [c2, (cur ? cur[1] : 0) + w2]); };
     for (const [c, w] of W.values()) {
+      if (okAtChaos(c, p.facts, e, p)) put(c, w * TRUMP_STAY); // 移さなかった（はったり）
       const as = c.filter(x => !foundBefore.includes(x)), bs = unrev.filter(x => !c.includes(x));
       if (!as.length || !bs.length) continue;
       const [wa, wb] = trumpWeights(as, bs, prev);
       for (const a of as) for (const b of bs) {
         const c2 = c.map(x => x === a ? b : x).sort((x, y) => x - y);
-        if (!okAtChaos(c2, p.facts, e, p)) continue;
-        const key = c2.join("-"), cur = next.get(key);
-        next.set(key, [c2, (cur ? cur[1] : 0) + w * wa(a) * wb(b)]);
+        if (okAtChaos(c2, p.facts, e, p)) put(c2, w * (1 - TRUMP_STAY) * wa(a) * wb(b));
       }
     }
     W = next;
@@ -775,7 +784,7 @@ function cpuDecide(s) {
         if (exposed >= 0.2 || (me.found.length === 1 && hot >= 0.4)) {
           const a = [...unf].sort((x, y) => r.prob[y] - r.prob[x])[0];
           const b = [...spots].sort((x, y) => r.prob[x] - r.prob[y])[0];
-          return { type: "trump", a, b };
+          return Math.random() < TRUMP_STAY ? { type: "trump", stay: true } : { type: "trump", a, b };
         }
       }
     }
@@ -880,7 +889,7 @@ function fmt(e, v) {
     case "decoyHit": return [`${W}の推理「${e.n}」はおとりだった！ペナルティ${e.cnt}枚` + (e.cnt < e.want ? `（地雷が確定しないよう${e.want}枚から減らした）` : ""), "hit"];
     case "seal": return [`${nm(e.target, v)}は次の番、ルーレットを回せない`];
     case "pass": return [`${W}はパスした`];
-    case "trump": return [e.who === v ? `切り札：地雷を ${e.a} から ${e.b} に移した` : `${W}が切り札を使った（中身は秘密）`, "hit"];
+    case "trump": return [e.who === v ? (e.stay ? "切り札：地雷は移さなかった（はったり）" : `切り札：地雷を ${e.a} から ${e.b} に移した`) : `${W}が切り札を使った（中身は秘密）`, "hit"];
     case "win": return [e.who === v ? "あなたの勝ち！" : `${W}の勝ち`, "hit"];
   }
   return null;
@@ -1189,13 +1198,13 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
   if (s.step === "action") {
     const warn = op.decoys.length ? `${oppName()}はおとりを${op.decoys.length}枚仕掛けています。おとりの数字を推理して外すと、ペナルティが増えることがあります。` : "";
     if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。${warn}数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、公開されていない別のカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
+    if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、公開されていない別のカードに移します。「移さない」を選ぶと地雷はそのままで、相手には「切り札を使った」ことだけが伝わります（はったり）。</small></div><div class="btns"><button class="btn ghost sm" data-act="trump-stay">移さない（はったり）</button><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>カード</b>を選んでください<small>地雷ではない、公開されていないカードから選びます。相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     const gachi = isPick(s);
     if (ui.mode === "pick") return wrap(`<div class="prompt">使う効果を選んでください<small>一度使った効果は、${effectsOn(s).length}個全部を使い終わるまで使えません（残り ${effectsOn(s).length - mp.used.length} 個）。</small></div>
       <div class="pickgrid">${effectsOn(s).map(n => `<button data-act="pick" data-n="${n}" title="${esc(effText(s, n))}" ${mp.used.includes(n) || !hintOk(s, mp, n) ? "disabled" : ""}><b>${n}</b><span>${esc(SHORT[n])}</span></button>`).join("")}</div>
       <div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    const canTrump = trumpsLeft(s, mp) > 0 && mp.mines.some(m => !mp.found.includes(m)) && hidden(mp).some(n => !isMine(mp, n));
+    const canTrump = trumpsLeft(s, mp) > 0; // 移せる地雷・移し先が無くても、はったりは使える
     return wrap(`<div class="prompt">あなたの番です<small>${mp.sealed ? "封印されているので、この番は推理かパスだけです。" : gachi ? "推理するか、効果を1つ選んで使います。" : "推理かルーレットのどちらかを行います。"}${isChaos(s) && s.cfg.actions > 1 ? `（この番の残り行動 ${s.actionsLeft}回）` : ""}</small></div>
       <div class="btns"><button class="btn" data-act="guess-open">推理する</button>${mp.sealed ? `<button class="btn ghost" data-act="pass">パス</button>` : gachi ? `<button class="btn ghost" data-act="pick-open">効果を選ぶ</button>` : `<button class="btn ghost" data-act="spin">ルーレットを回す</button>`}${trumpsLeft(s, mp) > 0 ? `<button class="btn quiet" data-act="trump-open" ${canTrump ? "" : "disabled"} title="${canTrump ? "" : "地雷ではない、公開されていないカードがあると使えます"}">${isChaos(s) && s.cfg.trumps > 1 ? `切り札（残り${trumpsLeft(s, mp)}回）` : "切り札（1回）"}</button>` : ""}</div>`);
   }
@@ -1351,7 +1360,7 @@ function viewForGuest(s) {
   if (v.phase === "over") return v;
   v.p0.mines = [];
   v.p0.decoys = v.p0.decoys.map(() => -1); // 枚数だけ伝える
-  for (const e of v.log) if (e.who === 0 && (e.k === "trump" || e.k === "decoy")) { delete e.a; delete e.b; delete e.n; }
+  for (const e of v.log) if (e.who === 0 && (e.k === "trump" || e.k === "decoy")) { delete e.a; delete e.b; delete e.n; delete e.stay; }
   return v;
 }
 // ページを閉じても戻れるように、部屋を作った側は対戦の状態ごと、参加した側は部屋コードだけをブラウザに保存する
@@ -1498,7 +1507,7 @@ function renderRules() {
   $("#rules").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="ルール">
     <h2>ルール</h2>
     <h3>準備</h3>
-    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li><li>先攻のほうが有利になりやすいため、対戦開始時に先攻の地雷以外のカードが1枚ランダムに公開されます（先攻ハンデ）。</li></ul>
+    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li><li>先攻のほうが有利になりやすいため、対戦開始時に先攻の地雷以外のカードがランダムに公開されます（先攻ハンデ）。普通ルールとハチャメチャモードは1枚、ガチモードは2枚です。</li></ul>
     <h3>自分の番</h3>
     <ul><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li>
     <li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
@@ -1511,14 +1520,14 @@ function renderRules() {
     <li>封印（10）された人は、次の番ルーレットを回せず、推理かパスだけになります。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(effText(S, n))}</span></li>`).join("")}</ul>
     <h3>ガチモード</h3>
-    <p>ルーレットの代わりに、1〜10の効果から使うものを自分で選びます。一度使った効果は、10個全部を1回ずつ使い終わるまで使えません（使い切ると全部また使えます）。それ以外は普通ルールと同じです。</p>
+    <p>ルーレットの代わりに、1〜10の効果から使うものを自分で選びます。一度使った効果は、10個全部を1回ずつ使い終わるまで使えません（使い切ると全部また使えます）。先攻ハンデが2枚になること以外は、普通ルールと同じです。</p>
     <h3>ハチャメチャモード</h3>
     <p>普通ルールを基準に、カードの枚数（6〜16枚）、地雷の数（1〜3枚）、推理ハズレのペナルティ枚数、切り札の回数、ヒント効果（2・3・5・6・7）を使える回数、効果の決め方（ルーレット／自分で選ぶ）、1つの番の行動回数、効果ごとの出やすさを対戦前に決めて遊びます。カードの枚数が変わると、大小ヒントの境目は真ん中より上（例：10枚なら6以上）になります。</p>
     ${isChaos(S) ? `<p class="note">この対戦の設定：カード${S.cfg.n}枚・地雷${S.cfg.k}枚・ペナルティ${S.cfg.penalty}枚・切り札${S.cfg.trumps}回・ヒント${S.cfg.hintLimit == null ? "無制限" : S.cfg.hintLimit + "回"}・${S.cfg.pick ? "効果は自分で選ぶ" : "ルーレット"}・1つの番に${S.cfg.actions}回行動・出やすさ ${NUMS.map(n => `${n}:${S.cfg.weights[n]}`).join(" ")}</p>` : ""}
     <h3>切り札（1ゲーム1回）</h3>
-    <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない公開されていないカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
+    <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない公開されていないカードへこっそり移せます。相手には「使った」ことだけが伝わります。地雷を移さずに「使った」ことだけを伝える、はったりもできます。</p>
     <h3>推理アシスト</h3>
-    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・5・6・7のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。そのとき、切り札の時点で疑われていた地雷ほど移されやすく、疑われていなかったカードほど移し先に選ばれやすいとみなします。</p>
+    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・5・6・7のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。そのとき、切り札の時点で疑われていた地雷ほど移されやすく、疑われていなかったカードほど移し先に選ばれやすいとみなします。また、4回に1回くらいは移していない（はったり）とみなします。</p>
     <div class="btns"><button class="btn" data-act="close-rules">閉じる</button></div>
   </div>`;
   $("#rules").hidden = false;
@@ -1558,6 +1567,7 @@ document.addEventListener("click", ev => {
     case "chaos-start": return startChaos();
     case "guess-open": ui = { mode: "guess" }; return render();
     case "trump-open": ui = { mode: "trumpA" }; return render();
+    case "trump-stay": return doAct({ type: "trump", stay: true });
     case "cancel": ui = {}; return render();
     case "spin": return doAct({ type: "spin" });
     case "pick-open": ui = { mode: "pick" }; return render();
