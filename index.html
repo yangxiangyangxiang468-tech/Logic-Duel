@@ -252,6 +252,13 @@ button.card.sel { transform: translateY(-6px); box-shadow: 0 0 0 3px var(--brass
 .pickgrid button:hover:not([disabled]) { box-shadow: 0 0 0 2px var(--brass); }
 .pickgrid button[disabled] { opacity: .3; cursor: not-allowed; }
 .netwarn small { color: var(--danger); }
+.fxgrid .fx.off { opacity: .3; }
+.cfg { gap: 10px; }
+.cfg h3 { font-size: 18px; }
+.cfg-grid, .cfg-fx { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px 18px; }
+.cfg label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.cfg label b { font-family: var(--f-num); color: var(--brass); }
+.cfg select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; }
 .modetag { font-size: 12px; color: var(--danger); border: 1px solid var(--danger); border-radius: 999px; padding: 2px 10px; align-self: center; }
 .note b { font-family: var(--f-num); color: var(--brass); }
 .splash { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 25; width: min(360px, calc(100% - 32px)); background: var(--panel); border: 2px solid var(--brass); border-radius: 18px; padding: 18px 24px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 30px rgba(214,173,87,.35); pointer-events: none; animation: pop .25s ease-out; }
@@ -364,13 +371,51 @@ const STATE_V = 7; // 旧ルール（v1: 場あり / v2: 先攻ハンデなし /
 const MAX_DECOYS = 2;
 const NEAR = 2; // 距離ヒントは「差2以内に地雷があるか」だけを答える
 
+// ---------- ハチャメチャモード（rule: "chaos"） ----------
+// 普通ルールを基準に、対戦前に決めた設定 s.cfg で動く別モード。プレイヤーにはカード枚数 n・地雷の数 k を持たせる。
+// 普通・ガチの状態には s.cfg / p.n / p.k が無く、下の補助関数はそのとき従来の値（1〜10・地雷2枚）を返す
+const CHAOS_DEFAULT = { n: 10, k: 2, penalty: 1, trumps: 1, hintLimit: null, pick: false, actions: 1, weights: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1 } };
+const isChaos = s => s?.rule === "chaos";
+const isPick = s => s?.rule === "gachi" || (isChaos(s) && s.cfg.pick); // 効果を自分で選ぶか
+const range = n => Array.from({ length: n }, (_, i) => i + 1);
+const numsOf = p => p.n ? range(p.n) : NUMS;
+const kOf = p => p.k || 2;
+const bigOf = p => p.n ? Math.floor(p.n / 2) + 1 : 6; // 大小ヒントの境目（10枚なら6以上）
+const effectsOn = s => isChaos(s) ? NUMS.filter(n => s.cfg.weights[n] > 0) : NUMS; // 使う効果
+const trumpsLeft = (s, p) => isChaos(s) ? s.cfg.trumps - p.trumpCount : (p.trumpUsed ? 0 : 1);
+const hintOk = (s, p, n) => !(isChaos(s) && s.cfg.hintLimit != null && HINT_EFFECTS.includes(n) && p.hintsUsed >= s.cfg.hintLimit);
+function combos(xs, k, from = 0, acc = [], out = []) {
+  if (acc.length === k) { out.push([...acc]); return out; }
+  for (let i = from; i < xs.length; i++) { acc.push(xs[i]); combos(xs, k, i + 1, acc, out); acc.pop(); }
+  return out;
+}
+function chaosInit(s, cfg) {
+  s.cfg = cfg; s.actionsLeft = cfg.actions;
+  for (const p of [s.p0, s.p1]) {
+    p.n = cfg.n; p.k = cfg.k; p.cards = {};
+    for (const n of range(cfg.n)) p.cards[n] = { r: false };
+    Object.assign(p, { trumpCount: 0, swaps: [], hintsUsed: 0 });
+  }
+}
+// ルーレットの出目（ハチャメチャ）：重みどおりに選ぶ。ヒントの上限に達した人にはヒントを出さない。3回連続は避ける
+function rollChaos(s, who) {
+  const me = P(s, who), w = s.cfg.weights;
+  let pool = NUMS.filter(n => w[n] > 0 && hintOk(s, me, n));
+  const [a, b] = s.recentSpins || [];
+  if (a != null && a === b && pool.some(n => n !== a)) pool = pool.filter(n => n !== a);
+  if (!pool.length) return null;
+  let t = Math.random() * pool.reduce((x, n) => x + w[n], 0);
+  for (const n of pool) { t -= w[n]; if (t < 0) return n; }
+  return pool[pool.length - 1];
+}
+
 // ---------- ゲームエンジン（純粋関数） ----------
 const clone = o => JSON.parse(JSON.stringify(o));
 const P = (s, i) => s["p" + i];
 const C = (p, n) => p.cards[n];
-const hidden = p => NUMS.filter(n => !C(p, n).r);
+const hidden = p => numsOf(p).filter(n => !C(p, n).r);
 const isMine = (p, n) => p.mines.includes(n);
-const ep = p => p.trumpUsed ? 1 : 0;
+const ep = p => p.trumpCount ?? (p.trumpUsed ? 1 : 0); // 切り札を何回使ったか（ヒントがいつの情報か）
 const bothReady = s => s.p0.ready && s.p1.ready;
 const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
 const distTo = (x, pair) => Math.min(Math.abs(x - pair[0]), Math.abs(x - pair[1]));
@@ -382,8 +427,10 @@ function newPlayer(uid) {
   return { uid: uid || null, ready: false, mines: [], found: [], cards, trumpUsed: false, shield: false, decoys: [], decoyHits: 0, sealed: false, used: [], facts: [], swapUnrev: null };
 }
 // rule: "normal" = ルーレット / "gachi" = ガチモード（1〜10の効果を自分で選ぶ。10個全部使うまで同じ効果は使えない）
-function newGame(mode, uid0, uid1, rule = "normal") {
-  return { v: STATE_V, mode, rule, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
+function newGame(mode, uid0, uid1, rule = "normal", cfg = null) {
+  const s = { v: STATE_V, mode, rule, phase: "setup", turn: 0, turnNo: 1, step: "action", pending: null, winner: null, p0: newPlayer(uid0), p1: newPlayer(uid1), log: [], spin: null };
+  if (rule === "chaos") chaosInit(s, cfg || CHAOS_DEFAULT);
+  return s;
 }
 const LOG_MAX = 400; // 1試合ぶんを最初から見返せる量
 function addLog(s, e) { e.t = s.turnNo; s.log.push(e); if (s.log.length > LOG_MAX) s.log.splice(0, s.log.length - LOG_MAX); }
@@ -398,7 +445,7 @@ function reveal(s, owner, n, cause) {
     p.found.push(n);
     p.facts.push({ t: "mine", n, e: ep(p) });
     addLog(s, { k: "reveal", owner, n, mine: true, cause });
-    if (p.found.length >= 2) { s.phase = "over"; s.winner = 1 - owner; addLog(s, { k: "win", who: 1 - owner }); }
+    if (p.found.length >= kOf(p)) { s.phase = "over"; s.winner = 1 - owner; addLog(s, { k: "win", who: 1 - owner }); }
   } else {
     p.facts.push({ t: "not", n, e: ep(p) });
     addLog(s, { k: "reveal", owner, n, mine: false, cause });
@@ -411,8 +458,8 @@ function reveal(s, owner, n, cause) {
 function decoyPenalty(s, who, n) {
   const p = P(s, who), owner = P(s, 1 - who);
   owner.decoyHits++;
-  const want = owner.found.length === 1 && p.found.length === 0 ? 3 : owner.decoyHits === 1 ? 1 : 2;
-  const pool = NUMS.filter(x => !C(p, x).r && !isMine(p, x));
+  const want = (owner.found.length === 1 && p.found.length === 0 ? 3 : owner.decoyHits === 1 ? 1 : 2) + (isChaos(s) ? s.cfg.penalty - 1 : 0);
+  const pool = numsOf(p).filter(x => !C(p, x).r && !isMine(p, x));
   const left = p.mines.filter(m => !p.found.includes(m)).length;
   const k = Math.min(want, Math.max(0, pool.length - left));
   let picks;
@@ -423,7 +470,7 @@ function decoyPenalty(s, who, n) {
 }
 function penalty(s, who, cause = "penalty") {
   const p = P(s, who);
-  const pool = NUMS.filter(n => !C(p, n).r && !isMine(p, n));
+  const pool = numsOf(p).filter(n => !C(p, n).r && !isMine(p, n));
   if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
   reveal(s, who, rnd(pool), cause);
 }
@@ -434,15 +481,19 @@ function startPlay(s) {
   s.phase = "play";
   if (!s.handicap) { s.handicap = true; for (let i = 0; i < (s.rule === "gachi" ? 2 : 1); i++) penalty(s, 0, "handicap"); }
 }
-// 封印は「封印された人の次の番」だけ効くので、その人の番が終わるときに解く
-function endTurn(s) {
+// 封印は「封印された人の次の番」だけ効くので、その人の番が終わるときに解く。
+// ハチャメチャで1つの番に複数回行動できるときは、残りがあれば番を続ける（force = パスなどで番を終える）
+function endTurn(s, force = false) {
   if (s.phase === "over") return;
+  if (isChaos(s) && !force && s.actionsLeft > 1) { s.actionsLeft--; s.step = "action"; s.pending = null; return; }
   P(s, s.turn).sealed = false;
   s.turn = 1 - s.turn; s.turnNo++; s.step = "action"; s.pending = null;
+  if (isChaos(s)) s.actionsLeft = s.cfg.actions;
 }
 
 // ルーレットの出目。同じ数字が3回続かないよう、直前の2回（両者の通し）が同じならその数字を除いて選ぶ
-function rollSpin(s) {
+function rollSpin(s, who) {
+  if (isChaos(s)) return rollChaos(s, who);
   const [a, b] = s.recentSpins || [];
   return rnd(a != null && a === b ? NUMS.filter(n => n !== a) : NUMS);
 }
@@ -450,12 +501,13 @@ function rollSpin(s) {
 function startEffect(s, who, n) {
   const me = P(s, who), op = P(s, 1 - who);
   const pend = () => { s.step = "effect"; s.pending = { eff: n }; };
+  if (isChaos(s) && HINT_EFFECTS.includes(n)) me.hintsUsed++;
   if (HINT_EFFECTS.includes(n) && op.shield) { op.shield = false; addLog(s, { k: "shieldBlock", who, target: 1 - who }); return endTurn(s); }
   switch (n) {
     case 1: { const h = hidden(op); if (!h.length) { addLog(s, { k: "none", who }); return endTurn(s); } reveal(s, 1 - who, rnd(h), "e1"); return endTurn(s); }
-    case 2: { const sum = op.mines[0] + op.mines[1]; op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return endTurn(s); }
+    case 2: { const sum = op.mines.reduce((a, b) => a + b, 0); op.facts.push({ t: "sum", s: sum, e: ep(op) }); addLog(s, { k: "sum", who, s: sum }); return endTurn(s); }
     case 4: me.shield = true; addLog(s, { k: "shield", who }); return endTurn(s);
-    case 5: { const ev = op.mines.filter(m => m >= 6).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return endTurn(s); }
+    case 5: { const ev = op.mines.filter(m => m >= bigOf(op)).length; op.facts.push({ t: "big", ev, e: ep(op) }); addLog(s, { k: "big", who, ev }); return endTurn(s); }
     case 6: { const ev = op.mines.filter(m => m % 2 === 0).length; op.facts.push({ t: "par", ev, e: ep(op) }); addLog(s, { k: "mpar", who, ev }); return endTurn(s); }
     case 10: op.sealed = true; addLog(s, { k: "seal", who, target: 1 - who }); return endTurn(s);
     case 9: if (!hidden(me).some(x => !isMine(me, x) && !me.decoys.includes(x))) { addLog(s, { k: "none", who }); return endTurn(s); } return pend();
@@ -477,17 +529,17 @@ function resolveEffect(s, who, a) {
       addLog(s, { k: "cnt", who, ns, c }); return endTurn(s);
     }
     case 7: {
-      const x = a.n; if (!NUMS.includes(x)) fail("数字を選んでください");
-      const near = nearHint(x, op.mines);
+      const x = a.n; if (!numsOf(op).includes(x)) fail("数字を選んでください");
+      const near = isChaos(s) ? op.mines.some(m => Math.abs(x - m) <= NEAR) : nearHint(x, op.mines); // ハチャメチャは地雷が何枚でも全部を見る
       op.facts.push({ t: "dist", x, near, e: ep(op) });
       addLog(s, { k: "dist", who, x, near }); return endTurn(s);
     }
     case 8: {
-      const n = a.n; if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
+      const n = a.n; if (!numsOf(op).includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
       reveal(s, 1 - who, n, "e8"); return endTurn(s);
     }
     case 9: {
-      const n = a.n; if (!NUMS.includes(n) || C(me, n).r || isMine(me, n)) fail("地雷ではない、公開されていない自分のカードを選んでください");
+      const n = a.n; if (!numsOf(me).includes(n) || C(me, n).r || isMine(me, n)) fail("地雷ではない、公開されていない自分のカードを選んでください");
       if (me.decoys.includes(n)) fail("そのカードはもうおとりです");
       me.decoys = [...me.decoys, n].slice(-MAX_DECOYS); // 3枚目を仕掛けたら古いほうが消える
       addLog(s, { k: "decoy", who, n }); return endTurn(s);
@@ -504,48 +556,51 @@ function act(s0, who, a) {
   switch (a.type) {
     case "trump": {
       if (s.step !== "action") fail("切り札は自分の番の最初に使えます");
-      if (me.trumpUsed) fail("切り札はもう使いました");
+      if (trumpsLeft(s, me) <= 0) fail("切り札はもう使いました");
       if (!me.mines.includes(a.a) || me.found.includes(a.a)) fail("判明していない地雷を選んでください");
       if (C(me, a.b)?.r !== false || isMine(me, a.b)) fail("地雷ではない、公開されていないカードを選んでください");
-      me.swapUnrev = NUMS.filter(n => !C(me, n).r && !me.found.includes(n));
+      if (isChaos(s)) { me.swaps.push(numsOf(me).filter(n => !C(me, n).r && !me.found.includes(n))); me.trumpCount++; }
+      else me.swapUnrev = NUMS.filter(n => !C(me, n).r && !me.found.includes(n));
       me.mines = me.mines.map(x => x === a.a ? a.b : x);
       me.decoys = me.decoys.filter(x => x !== a.b);
-      me.trumpUsed = true;
+      if (!isChaos(s)) me.trumpUsed = true;
       addLog(s, { k: "trump", who, a: a.a, b: a.b });
       break;
     }
     case "guess": {
       if (s.step !== "action") fail("推理は自分の番の最初に行います");
       const n = a.n;
-      if (!NUMS.includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
+      if (!numsOf(op).includes(n) || C(op, n).r) fail("まだ公開されていない数字を選んでください");
       if (isMine(op, n)) { addLog(s, { k: "guessHit", who, n }); reveal(s, 1 - who, n, "guess"); }
       else {
         op.facts.push({ t: "not", n, e: ep(op) }); addLog(s, { k: "guessMiss", who, n });
         C(op, n).r = true; // 外れた数字は地雷ではないと確定するので表にする
         if (op.decoys.includes(n)) { op.decoys = op.decoys.filter(x => x !== n); decoyPenalty(s, who, n); }
-        else penalty(s, who);
+        else for (let i = 0; i < (isChaos(s) ? s.cfg.penalty : 1); i++) penalty(s, who);
       }
       endTurn(s);
       break;
     }
     case "pick": {
-      if (s.rule !== "gachi") fail("効果を選べるのはガチモードだけです");
+      if (!isPick(s)) fail("効果を選べるのはガチモードだけです");
       if (s.step !== "action") fail("効果は自分の番の最初に使います");
       if (me.sealed) fail("封印されているので、この番は効果を使えません");
       const n = a.n;
-      if (!NUMS.includes(n)) fail("効果を選んでください");
-      if (me.used.includes(n)) fail("その効果は、10個全部を使い終わるまで使えません");
-      me.used = me.used.length + 1 >= NUMS.length ? [] : [...me.used, n]; // 10個使い切ったら全部また使える
+      if (!effectsOn(s).includes(n)) fail("効果を選んでください");
+      if (me.used.includes(n)) fail("その効果は、全部を使い終わるまで使えません");
+      if (!hintOk(s, me, n)) fail("ヒントの効果は、もう使える回数がありません");
+      me.used = me.used.length + 1 >= effectsOn(s).length ? [] : [...me.used, n]; // 全部使い切ったら全部また使える
       s.spin = { who, n, id: Date.now() + "-" + Math.floor(Math.random() * 1e6), chosen: true };
       addLog(s, { k: "spin", who, n, chosen: true });
       startEffect(s, who, n);
       break;
     }
     case "spin": {
-      if (s.rule === "gachi") fail("ガチモードでは効果を自分で選びます");
+      if (isPick(s)) fail("このモードでは効果を自分で選びます");
       if (s.step !== "action") fail("ルーレットは自分の番の最初に回します");
       if (me.sealed) fail("封印されているので、この番はルーレットを回せません");
-      const n = a.n || rollSpin(s);
+      const n = a.n || rollSpin(s, who);
+      if (n == null) fail("使える効果がありません。推理してください");
       s.recentSpins = [...(s.recentSpins || []), n].slice(-2);
       s.spin = { who, n, id: Date.now() + "-" + Math.floor(Math.random() * 1e6) };
       addLog(s, { k: "spin", who, n });
@@ -555,7 +610,7 @@ function act(s0, who, a) {
     case "pass": {
       if (s.step !== "action") fail("いまはパスできません");
       if (!me.sealed) fail("パスできるのは封印されているときだけです");
-      addLog(s, { k: "pass", who }); endTurn(s);
+      addLog(s, { k: "pass", who }); endTurn(s, true);
       break;
     }
     case "eff": resolveEffect(s, who, a); break;
@@ -580,6 +635,7 @@ function okAt(pair, facts, e) {
 }
 // p: 推理される側のプレイヤー。公開情報（facts / 切り札使用 / 切り札時点の未公開カード）だけを使う
 function solve(p) {
+  if (p.k) return solveChaos(p);
   const W = new Map();
   const add = (pair, w) => { const k = pair[0] + "-" + pair[1]; W.set(k, (W.get(k) || 0) + w); };
   const facts = p.facts;
@@ -606,6 +662,45 @@ function solve(p) {
   for (const c of list) { prob[c.pair[0]] += c.pr; prob[c.pair[1]] += c.pr; }
   return { count: list.length, total, list, prob, map: W };
 }
+// ハチャメチャ用：地雷 k 枚の組み合わせを全列挙。切り札は何回でも、使うたびに
+// 「どの地雷を・どの未公開カードへ移したか」を全部たどって、その時点以降の条件で絞る
+function okAtChaos(c, facts, e, p) {
+  for (const f of facts) {
+    if (f.e !== e) continue;
+    if (f.t === "not" && c.includes(f.n)) return false;
+    if (f.t === "mine" && !c.includes(f.n)) return false;
+    if (f.t === "sum" && c.reduce((a, b) => a + b, 0) !== f.s) return false;
+    if (f.t === "cnt" && c.filter(x => f.ns.includes(x)).length !== f.c) return false;
+    if (f.t === "par" && c.filter(x => x % 2 === 0).length !== f.ev) return false;
+    if (f.t === "big" && c.filter(x => x >= bigOf(p)).length !== f.ev) return false;
+    if (f.t === "dist" && !c.some(m => Math.abs(f.x - m) <= NEAR) !== !f.near) return false;
+  }
+  return true;
+}
+function solveChaos(p) {
+  let W = new Map();
+  for (const c of combos(numsOf(p), p.k)) if (okAtChaos(c, p.facts, 0, p)) W.set(c.join("-"), [c, 1]);
+  for (let e = 1; e <= p.trumpCount; e++) {
+    const foundBefore = p.facts.filter(f => f.e < e && f.t === "mine").map(f => f.n), unrev = p.swaps[e - 1], next = new Map();
+    for (const [c, w] of W.values()) {
+      const as = c.filter(x => !foundBefore.includes(x)), bs = unrev.filter(x => !c.includes(x));
+      if (!as.length || !bs.length) continue;
+      for (const a of as) for (const b of bs) {
+        const c2 = c.map(x => x === a ? b : x).sort((x, y) => x - y);
+        if (!okAtChaos(c2, p.facts, e, p)) continue;
+        const key = c2.join("-"), cur = next.get(key);
+        next.set(key, [c2, (cur ? cur[1] : 0) + w / (as.length * bs.length)]);
+      }
+    }
+    W = next;
+  }
+  const map = new Map([...W.entries()].map(([k, [, w]]) => [k, w]));
+  let total = 0; for (const w of map.values()) total += w;
+  const list = [...W.values()].map(([c, w]) => ({ pair: c, w, pr: total ? w / total : 0 })).sort((a, b) => b.w - a.w || a.pair[0] - b.pair[0]);
+  const prob = {}; for (const n of numsOf(p)) prob[n] = 0;
+  for (const c of list) for (const x of c.pair) prob[x] += c.pr;
+  return { count: list.length, total, list, prob, map };
+}
 // 答えの分かれ方のエントロピー（大きいほど、聞く価値がある）
 function entropy(r, answer) {
   const d = new Map();
@@ -625,22 +720,22 @@ function cpuPickEffect(s) {
   const blocked = op.shield ? 0.05 : 1; // シールドがあるとヒントは防がれる
   const value = {
     1: hid.length ? hid.reduce((a, x) => a + entropy(r, p => p.includes(x)) + r.prob[x] * .5, 0) / hid.length : 0,
-    2: blocked * entropy(r, p => p[0] + p[1]),
+    2: blocked * entropy(r, p => p.reduce((a, b) => a + b, 0)),
     3: blocked * best(hid.flatMap((x, i) => hid.slice(i + 1).map(y => [x, y])), ([x, y]) => entropy(r, p => p.filter(z => z === x || z === y).length)),
     4: me.shield ? 0 : .2 + exposed * 2,
-    5: blocked * entropy(r, p => p.filter(x => x >= 6).length),
+    5: blocked * entropy(r, p => p.filter(x => x >= bigOf(op)).length),
     6: blocked * entropy(r, p => p.filter(x => x % 2 === 0).length),
-    7: blocked * best(NUMS, x => entropy(r, p => nearHint(x, p))),
+    7: blocked * best(numsOf(op), x => entropy(r, p => isChaos(s) ? p.some(m => Math.abs(x - m) <= NEAR) : nearHint(x, p))),
     8: best(hid, x => entropy(r, p => p.includes(x)) + r.prob[x] * .8),
     9: me.decoys.length >= MAX_DECOYS ? .05 : .15 + exposed * 1.5,
     10: op.sealed ? 0 : .25 + exposed,
   };
-  return NUMS.filter(n => !me.used.includes(n)).sort((a, b) => value[b] - value[a])[0];
+  return effectsOn(s).filter(n => !me.used.includes(n) && hintOk(s, me, n)).sort((a, b) => value[b] - value[a])[0];
 }
 function cpuDecide(s) {
   const me = s.p1, op = s.p0;
   if (s.step === "action") {
-    if (!me.trumpUsed) {
+    if (trumpsLeft(s, me) > 0) {
       const unf = me.mines.filter(m => !me.found.includes(m));
       const spots = hidden(me).filter(n => !isMine(me, n));
       if (unf.length && spots.length) {
@@ -662,7 +757,11 @@ function cpuDecide(s) {
     const bold = !op.decoys.length && pb >= 0.34 && Math.random() < 0.5;
     if (pb >= 0.5 || r.count <= 2 || bold) return { type: "guess", n: best };
     if (me.sealed) return pb >= 0.25 ? { type: "guess", n: best } : { type: "pass" };
-    return s.rule === "gachi" ? { type: "pick", n: cpuPickEffect(s) } : { type: "spin" };
+    if (isPick(s) && !isChaos(s)) return { type: "pick", n: cpuPickEffect(s) };
+    // ハチャメチャで情報が得られる効果（公開・ヒント）が残っていなければ、守りの効果を回し続けずに推理する
+    if (isChaos(s) && !effectsOn(s).some(n => [1, 2, 3, 5, 6, 7, 8].includes(n) && hintOk(s, me, n))) return { type: "guess", n: best };
+    if (isPick(s)) { const n = cpuPickEffect(s); return n == null ? { type: "guess", n: best } : { type: "pick", n }; }
+    return { type: "spin" };
   }
   if (s.step === "effect") {
     const e = s.pending.eff, r = solve(op);
@@ -679,7 +778,7 @@ function cpuDecide(s) {
       }
       case 7: {
         let best = 1, bestH = -1;
-        for (const x of NUMS) { const h = entropy(r, pair => nearHint(x, pair)); if (h > bestH) { bestH = h; best = x; } }
+        for (const x of numsOf(op)) { const h = entropy(r, pair => isChaos(s) ? pair.some(m => Math.abs(x - m) <= NEAR) : nearHint(x, pair)); if (h > bestH) { bestH = h; best = x; } }
         return { type: "eff", n: best };
       }
       case 8: return { type: "eff", n: hidden(op).sort((a, b) => r.prob[b] - r.prob[a])[0] };
@@ -693,9 +792,20 @@ function cpuDecide(s) {
   }
 }
 
+// ハチャメチャでは地雷の数・カードの枚数で文言が変わる。普通・ガチは従来の文言のまま
+const bigTxt = (p, ev) => p?.k ? `${bigOf(p)}以上が${ev}枚` : MBIG[ev];
+const parTxt = (p, ev) => p?.k ? `偶数が${ev}枚` : MPAR[ev];
+const nCk = (n, k) => { let r = 1; for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1); return Math.round(r); };
+const combCount = p => p.k ? nCk(p.n, p.k) : 45;
+function effText(s, n) {
+  if (!isChaos(s)) return EFFECTS[n];
+  const k = s.cfg.k, big = Math.floor(s.cfg.n / 2) + 1;
+  return { 2: `相手の地雷${k}枚の合計値がわかる`, 5: `相手の地雷${k}枚のうち、${big}以上が何枚あるかわかる`, 6: `相手の地雷${k}枚のうち、偶数が何枚あるかわかる` }[n] || EFFECTS[n];
+}
+
 // ---------- 画面状態 ----------
 let S = null;               // ゲーム状態
-let screen = "start";       // start | game
+let screen = "start";       // start | game | chaos（ハチャメチャの設定画面）
 let ui = {};                // 自分の操作中の選択（setupSel, mode, trumpA, e3）
 let me = 0;                 // 自分の席番号（オンラインでは -1 = 観戦）
 let cpuTimer = null;
@@ -730,8 +840,8 @@ function fmt(e, v) {
     case "spin": return [e.chosen ? `${W}が効果 ${e.n}「${SHORT[e.n]}」を選んだ` : `${W}のルーレット → ${e.n}「${SHORT[e.n]}」`];
     case "sum": return told(`${oppName()}の地雷の合計は ${e.s}`, `あなたの地雷の合計（${e.s}）を知られた`, `${W}が合計ヒントを得た`);
     case "cnt": return told(`${oppName()}の地雷は [${e.ns.join(", ")}] の中に ${e.c} 枚`, `[${e.ns.join(", ")}] の中のあなたの地雷の数（${e.c} 枚）を知られた`, `${W}が2枚質問をした`);
-    case "big": return told(`${oppName()}の地雷は${MBIG[e.ev]}`, `あなたの地雷の大小（${MBIG[e.ev]}）を知られた`, `${W}が大小ヒントを得た`);
-    case "mpar": return told(`${oppName()}の地雷は${MPAR[e.ev]}`, `あなたの地雷の偶奇（${MPAR[e.ev]}）を知られた`, `${W}が偶奇ヒントを得た`);
+    case "big": { const tp = P(S, 1 - e.who); return told(`${oppName()}の地雷は${bigTxt(tp, e.ev)}`, `あなたの地雷の大小（${bigTxt(tp, e.ev)}）を知られた`, `${W}が大小ヒントを得た`); }
+    case "mpar": { const tp = P(S, 1 - e.who); return told(`${oppName()}の地雷は${parTxt(tp, e.ev)}`, `あなたの地雷の偶奇（${parTxt(tp, e.ev)}）を知られた`, `${W}が偶奇ヒントを得た`); }
     case "dist": return told(`${oppName()}の地雷は ${e.x} から差2以内に${e.near ? "ある" : "ない（3以上離れている）"}`, `${e.x} から差2以内にあなたの地雷が${e.near ? "ある" : "ない"}ことを知られた`, `${W}が距離ヒントを得た`);
     case "none": return [`${W}: 対象のカードがなく効果なし`];
     case "skip": return [`${W}は効果を使わなかった`];
@@ -762,21 +872,30 @@ function logKind(e) {
 }
 
 // ---------- ルーレット ----------
+// ルーレットのマス。ハチャメチャのルーレットは、効果の出やすさ（重み）に合わせてマスの大きさを変え、使わない効果は載せない
+function wheelSegs() {
+  if (!isChaos(S) || S.cfg.pick) return NUMS.map(n => ({ n, a0: (n - 1) * 36, a1: n * 36 }));
+  const w = S.cfg.weights, on = NUMS.filter(n => w[n] > 0), tot = on.reduce((a, n) => a + w[n], 0);
+  let a = 0;
+  return on.map(n => { const a0 = a; a += 360 * w[n] / tot; return { n, a0, a1: a }; });
+}
 function buildWheel() {
   const pt = (deg, r) => { const t = deg * Math.PI / 180; return [(r * Math.sin(t)).toFixed(2), (-r * Math.cos(t)).toFixed(2)]; };
   let g = "";
-  for (let k = 0; k < 10; k++) {
-    const a0 = k * 36, a1 = a0 + 36, [x0, y0] = pt(a0, 96), [x1, y1] = pt(a1, 96), [tx, ty] = pt(a0 + 18, 72);
-    g += `<path class="${k % 2 ? "seg-b" : "seg-a"}" d="M0 0 L${x0} ${y0} A96 96 0 0 1 ${x1} ${y1} Z"/>`;
+  const segs = wheelSegs();
+  segs.forEach(({ n, a0, a1 }, k) => {
+    const mid = (a0 + a1) / 2, [x0, y0] = pt(a0, 96), [x1, y1] = pt(a1, 96), [tx, ty] = pt(mid, 72);
+    g += segs.length === 1 ? `<circle class="seg-a" r="96"/>` : `<path class="${k % 2 ? "seg-b" : "seg-a"}" d="M0 0 L${x0} ${y0} A96 96 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1} Z"/>`;
     g += `<path class="seg-line" d="M0 0 L${x0} ${y0}"/>`;
-    g += `<text class="seg-num" x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="central" transform="rotate(${a0 + 18} ${tx} ${ty})">${k + 1}</text>`;
-  }
+    g += `<text class="seg-num" x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="central" transform="rotate(${mid} ${tx} ${ty})">${n}</text>`;
+  });
   return `<div class="wheel" aria-hidden="true"><svg class="disc" id="disc" viewBox="-100 -100 200 200">${g}<circle class="rim" r="97"/><circle class="hub" r="20"/><circle class="hub-in" r="12"/></svg><div class="pointer"></div></div>`;
 }
 function syncWheel(animate) {
   const disc = $("#disc"); if (!disc || !S || !S.spin) return;
   if (S.spin.id !== lastSpinId) {
-    const target = (360 - ((S.spin.n - 1) * 36 + 18)) % 360;
+    const seg = wheelSegs().find(g => g.n === S.spin.n);
+    const target = (360 - (seg ? (seg.a0 + seg.a1) / 2 : (S.spin.n - 1) * 36 + 18)) % 360;
     const cur = ((wheelRot % 360) + 360) % 360;
     wheelRot += (animate ? 360 * 4 : 0) + ((target - cur + 360) % 360);
     if (animate) { spinBusyUntil = Date.now() + 1750; const sp = S.spin; setTimeout(() => showSplash(sp), 1750); }
@@ -795,7 +914,7 @@ let splashTimer;
 function showSplash(sp) {
   if (screen !== "game" || !S) return;
   const el = $("#splash");
-  el.innerHTML = `<div class="who">${esc(nm(sp.who, me))}${sp.chosen ? "が選んだ効果" : "のルーレット"}</div><div class="num">${sp.n}</div><div class="name">${esc(SHORT[sp.n])}</div><div class="desc">${esc(EFFECTS[sp.n])}</div>`;
+  el.innerHTML = `<div class="who">${esc(nm(sp.who, me))}${sp.chosen ? "が選んだ効果" : "のルーレット"}</div><div class="num">${sp.n}</div><div class="name">${esc(SHORT[sp.n])}</div><div class="desc">${esc(effText(S, sp.n))}</div>`;
   el.hidden = false;
   clearTimeout(splashTimer);
   splashTimer = setTimeout(() => el.hidden = true, 2400);
@@ -805,12 +924,14 @@ function showSplash(sp) {
 function render() {
   renderTop();
   if (screen === "start") return renderStart();
+  if (screen === "chaos") return renderChaosSetup();
   renderGame();
 }
 function renderTop() {
   const a = [];
   a.push(`<button class="btn quiet sm" data-act="rules">ルール</button>`);
   if (screen === "game" && S?.rule === "gachi") a.unshift(`<span class="modetag">ガチモード</span>`);
+  if (screen === "game" && isChaos(S)) a.unshift(`<span class="modetag">ハチャメチャ</span>`);
   if (screen === "game") a.push(`<button class="btn quiet sm" data-act="home">${S && S.mode === "online" ? "部屋を出る" : "トップへ"}</button>`);
   $("#topActions").innerHTML = a.join("");
 }
@@ -841,8 +962,58 @@ function renderStart() {
         <div class="btns"><button class="btn" data-act="online-create" ${p2p ? "" : "disabled"}>部屋を作る（普通）</button><button class="btn ghost" data-act="online-create" data-rule="gachi" ${p2p ? "" : "disabled"}>部屋を作る（ガチ）</button></div>
         <div class="join"><input id="joinCode" maxlength="4" placeholder="コード" autocomplete="off" value="${esc(lastCode || "")}" aria-label="部屋コード"><button class="btn ghost" data-act="online-join" ${p2p ? "" : "disabled"}>参加する</button></div>
       </div>
+      <div class="mode">
+        <h3>ハチャメチャモード</h3>
+        <p>カードの枚数、地雷の数、効果の出やすさなどを自分で決めて遊ぶモード。普通ルールが基準です。</p>
+        <div class="btns"><button class="btn" data-act="chaos-open" data-target="cpu">ルールを決めてCPUと対戦</button><button class="btn ghost" data-act="chaos-open" data-target="online" ${p2p ? "" : "disabled"}>ルールを決めて部屋を作る</button></div>
+      </div>
     </div>
   </section>`;
+}
+
+// ---------- ハチャメチャモードの設定画面 ----------
+// 編集中の設定は見る人ごとの好みとして localStorage に残す（次に開いたとき前回の設定から始まる）
+let chaosCfg = { ...clone(CHAOS_DEFAULT), ...(load("lc_chaos_cfg") || {}) };
+let chaosTarget = "cpu"; // "cpu" | "online"
+function renderChaosSetup() {
+  const c = chaosCfg;
+  const sel = (name, opts, val) => `<select data-cfg="${name}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(val ?? "") ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const nums = (a, b, unit = "") => range(b - a + 1).map(i => [a + i - 1, `${a + i - 1}${unit}`]);
+  $("#main").innerHTML = `
+  <section class="start">
+    <div class="hero"><h2>ハチャメチャモード</h2><p>普通ルールを基準に、ルールを自分で決めて遊びます。${chaosTarget === "cpu" ? "CPUと対戦します。" : "部屋を作って友達と対戦します（参加した人もこの設定で遊びます）。"}先攻ハンデは普通ルールと同じ1枚です。設定によっては先攻・後攻の有利不利が大きくなります。</p></div>
+    <div class="mode cfg">
+      <h3>基本ルール</h3>
+      <div class="cfg-grid">
+        <label>カードの枚数 ${sel("n", nums(6, 16, "枚"), c.n)}</label>
+        <label>地雷の数 ${sel("k", nums(1, 3, "枚"), c.k)}</label>
+        <label>推理ハズレのペナルティ ${sel("penalty", nums(0, 3, "枚"), c.penalty)}</label>
+        <label>切り札の回数 ${sel("trumps", nums(0, 2, "回"), c.trumps)}</label>
+        <label>ヒント効果を使える回数 ${sel("hintLimit", [["", "無制限"], ...nums(0, 10, "回")], c.hintLimit)}</label>
+      </div>
+      <h3>効果</h3>
+      <div class="cfg-grid">
+        <label>効果の決め方 ${sel("pick", [["0", "ルーレット"], ["1", "自分で選ぶ"]], c.pick ? 1 : 0)}</label>
+        <label>1つの番の行動回数 ${sel("actions", nums(1, 2, "回"), c.actions)}</label>
+      </div>
+      <p class="note">効果ごとの出やすさ（0 = 使わない）。ルーレットでは数字が大きいほど出やすくなり、自分で選ぶ場合は1以上の効果だけが使えます。ヒント効果は 2・3・5・6・7 です。</p>
+      <div class="cfg-fx">${NUMS.map(n => `<label><span><b>${n}</b> ${esc(SHORT[n])}</span>${sel("w" + n, nums(0, 5), c.weights[n])}</label>`).join("")}</div>
+      <div class="btns"><button class="btn" data-act="chaos-start">${chaosTarget === "cpu" ? "この設定で始める" : "この設定で部屋を作る"}</button><button class="btn quiet" data-act="chaos-reset">標準（普通ルール）に戻す</button><button class="btn quiet" data-act="home">戻る</button></div>
+    </div>
+  </section>`;
+}
+function setChaosField(name, v) {
+  if (name.startsWith("w")) chaosCfg.weights = { ...chaosCfg.weights, [name.slice(1)]: Number(v) };
+  else if (name === "hintLimit") chaosCfg.hintLimit = v === "" ? null : Number(v);
+  else if (name === "pick") chaosCfg.pick = v === "1";
+  else chaosCfg[name] = Number(v);
+  store("lc_chaos_cfg", chaosCfg);
+}
+function startChaos() {
+  const c = clone(chaosCfg);
+  if (c.k > c.n - 3) return toast(`地雷が多すぎます。カード${c.n}枚なら地雷は${c.n - 3}枚までにしてください`);
+  if (!NUMS.some(n => c.weights[n] > 0)) return toast("使う効果を1つ以上選んでください（出やすさを1以上に）");
+  return chaosTarget === "cpu" ? startCpu("chaos", c) : createRoom("chaos", c);
 }
 
 function cardHTML(n, cls, act, extra = "", tag = "") {
@@ -861,11 +1032,12 @@ function renderGame() {
 
   // --- 相手席：公開されたカードだけ数字が見える ---
   const oppCls = n => [op.found.includes(n) ? "found" : (over && isMine(op, n) ? "mine" : ""), C(op, n).r ? "open" : ""].join(" ");
-  const oppCardsHTML = NUMS.map(n => C(op, n).r || over ? cardHTML(n, oppCls(n), "", "", C(op, n).r ? "公開" : "") : `<div class="card back"></div>`).join("");
+  const oppCardsHTML = numsOf(op).map(n => C(op, n).r || over ? cardHTML(n, oppCls(n), "", "", C(op, n).r ? "公開" : "") : `<div class="card back"></div>`).join("");
 
   const seatChips = (p, mine) => [
-    `<span class="chip ${p.found.length ? (mine ? "bad" : "on") : ""}">判明した地雷 ${p.found.length}/2</span>`,
-    `<span class="chip ${p.trumpUsed ? "" : "on"}">切り札 ${p.trumpUsed ? "使用済み" : "あり"}</span>`,
+    `<span class="chip ${p.found.length ? (mine ? "bad" : "on") : ""}">判明した地雷 ${p.found.length}/${kOf(p)}</span>`,
+    isChaos(s) && !s.cfg.trumps ? "" : `<span class="chip ${trumpsLeft(s, p) > 0 ? "on" : ""}">切り札 ${trumpsLeft(s, p) > 0 ? (isChaos(s) && s.cfg.trumps > 1 ? `あと${trumpsLeft(s, p)}回` : "あり") : "使用済み"}</span>`,
+    isChaos(s) && s.cfg.hintLimit != null ? `<span class="chip">ヒント あと${Math.max(0, s.cfg.hintLimit - p.hintsUsed)}回</span>` : "",
     p.shield ? `<span class="chip on">シールドあり</span>` : "",
     p.decoys.length ? `<span class="chip on">${mine ? `おとり ${p.decoys.join("・")}` : `おとり ${p.decoys.length}枚`}</span>` : "",
     p.sealed && !over ? `<span class="chip bad">封印中</span>` : "",
@@ -942,7 +1114,7 @@ function renderGame() {
         <div class="cards">${oppCardsHTML}</div>`;
   mine.innerHTML = `
         <div class="seat-head"><span class="seat-name">${me === -1 ? "P1" : "あなた"}</span>${setupMode ? "" : seatChips(mp, me !== -1)}</div>
-        <div class="cards">${NUMS.map(myCard).join("")}</div>`;
+        <div class="cards">${numsOf(mp).map(myCard).join("")}</div>`;
   $("#panel").outerHTML = panel.replace('<div class="panel">', '<div class="panel" id="panel">');
   $("#fxlist").innerHTML = renderFx(s, busy);
   $("#assist").innerHTML = assist;
@@ -952,7 +1124,7 @@ function renderGame() {
 }
 
 function numpad(kind, op, r, sel = [], all = false) {
-  return `<div class="numpad">${NUMS.map(n => {
+  return `<div class="numpad">${numsOf(op).map(n => {
     const dis = !all && C(op, n).r;
     return `<button class="${sel.includes(n) ? "on" : ""}" data-act="pad" data-kind="${kind}" data-n="${n}" ${dis ? "disabled" : ""} aria-label="${n}"><b>${n}</b><span>${C(op, n).r ? "公開" : pct(r.prob[n])}</span></button>`;
   }).join("")}</div>`;
@@ -969,7 +1141,8 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
     if (me === -1) return wrap(`<div class="prompt">観戦中<small>この部屋は満席です。</small></div>`);
     if (!mp.ready) {
       const sel = ui.setupSel || [];
-      return wrap(`${waitJoin}<div class="prompt">地雷にするカードを<b>2枚</b>選んでください<small>あなたのカードから選びます。相手に2枚とも当てられたら負けです。（選択中: ${sel.length ? sel.join(" と ") : "なし"}）</small></div><div class="btns"><button class="btn" data-act="setup-ok" ${sel.length === 2 ? "" : "disabled"}>この2枚で決定</button><button class="btn quiet" data-act="setup-random">おまかせ</button></div>`);
+      const k = kOf(mp);
+      return wrap(`${waitJoin}<div class="prompt">地雷にするカードを<b>${k}枚</b>選んでください<small>あなたのカードから選びます。相手に${k === 1 ? "当てられたら" : `${k}枚とも当てられたら`}負けです。（選択中: ${sel.length ? sel.join(" と ") : "なし"}）</small></div><div class="btns"><button class="btn" data-act="setup-ok" ${sel.length === k ? "" : "disabled"}>この${k}枚で決定</button><button class="btn quiet" data-act="setup-random">おまかせ</button></div>`);
     }
     return wrap(waitJoin || `<div class="prompt">相手が地雷を選ぶのを待っています…<small>部屋コード ${esc(online.code || "")}</small></div>`);
   }
@@ -989,17 +1162,17 @@ function renderPanel(s, phase, busy, myTurn, over, op, mp) {
     if (ui.mode === "guess") return wrap(`<div class="prompt">${oppName()}の地雷だと思う数字は？<small>外れると、あなたの地雷以外のカードが1枚ランダムに公開されます。${warn}数字の下は推理アシストの確率です。</small></div>${numpad("guess", op, r)}<div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpA") return wrap(`<div class="prompt">切り札：移したい<b>地雷</b>を選んでください<small>選んだ地雷の役割を、公開されていない別のカードに移します。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
     if (ui.mode === "trumpB") return wrap(`<div class="prompt">切り札：地雷 <b>${ui.trumpA}</b> の役割を移す<b>カード</b>を選んでください<small>地雷ではない、公開されていないカードから選びます。相手には「切り札を使った」ことだけが伝わります。</small></div><div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    const gachi = s.rule === "gachi";
-    if (ui.mode === "pick") return wrap(`<div class="prompt">使う効果を選んでください<small>一度使った効果は、10個全部を使い終わるまで使えません（残り ${NUMS.length - mp.used.length} 個）。</small></div>
-      <div class="pickgrid">${NUMS.map(n => `<button data-act="pick" data-n="${n}" title="${esc(EFFECTS[n])}" ${mp.used.includes(n) ? "disabled" : ""}><b>${n}</b><span>${esc(SHORT[n])}</span></button>`).join("")}</div>
+    const gachi = isPick(s);
+    if (ui.mode === "pick") return wrap(`<div class="prompt">使う効果を選んでください<small>一度使った効果は、${effectsOn(s).length}個全部を使い終わるまで使えません（残り ${effectsOn(s).length - mp.used.length} 個）。</small></div>
+      <div class="pickgrid">${effectsOn(s).map(n => `<button data-act="pick" data-n="${n}" title="${esc(effText(s, n))}" ${mp.used.includes(n) || !hintOk(s, mp, n) ? "disabled" : ""}><b>${n}</b><span>${esc(SHORT[n])}</span></button>`).join("")}</div>
       <div class="btns"><button class="btn quiet sm" data-act="cancel">やめる</button></div>`);
-    const canTrump = !mp.trumpUsed && mp.mines.some(m => !mp.found.includes(m)) && hidden(mp).some(n => !isMine(mp, n));
-    return wrap(`<div class="prompt">あなたの番です<small>${mp.sealed ? "封印されているので、この番は推理かパスだけです。" : gachi ? "推理するか、効果を1つ選んで使います。" : "推理かルーレットのどちらかを行います。"}</small></div>
-      <div class="btns"><button class="btn" data-act="guess-open">推理する</button>${mp.sealed ? `<button class="btn ghost" data-act="pass">パス</button>` : gachi ? `<button class="btn ghost" data-act="pick-open">効果を選ぶ</button>` : `<button class="btn ghost" data-act="spin">ルーレットを回す</button>`}${!mp.trumpUsed ? `<button class="btn quiet" data-act="trump-open" ${canTrump ? "" : "disabled"} title="${canTrump ? "" : "地雷ではない、公開されていないカードがあると使えます"}">切り札（1回）</button>` : ""}</div>`);
+    const canTrump = trumpsLeft(s, mp) > 0 && mp.mines.some(m => !mp.found.includes(m)) && hidden(mp).some(n => !isMine(mp, n));
+    return wrap(`<div class="prompt">あなたの番です<small>${mp.sealed ? "封印されているので、この番は推理かパスだけです。" : gachi ? "推理するか、効果を1つ選んで使います。" : "推理かルーレットのどちらかを行います。"}${isChaos(s) && s.cfg.actions > 1 ? `（この番の残り行動 ${s.actionsLeft}回）` : ""}</small></div>
+      <div class="btns"><button class="btn" data-act="guess-open">推理する</button>${mp.sealed ? `<button class="btn ghost" data-act="pass">パス</button>` : gachi ? `<button class="btn ghost" data-act="pick-open">効果を選ぶ</button>` : `<button class="btn ghost" data-act="spin">ルーレットを回す</button>`}${trumpsLeft(s, mp) > 0 ? `<button class="btn quiet" data-act="trump-open" ${canTrump ? "" : "disabled"} title="${canTrump ? "" : "地雷ではない、公開されていないカードがあると使えます"}">${isChaos(s) && s.cfg.trumps > 1 ? `切り札（残り${trumpsLeft(s, mp)}回）` : "切り札（1回）"}</button>` : ""}</div>`);
   }
   if (s.step === "effect") {
     const e = s.pending.eff;
-    const head = `<div class="effect-card"><div class="big">${e}</div><div class="prompt">${esc(EFFECTS[e])}</div></div>`;
+    const head = `<div class="effect-card"><div class="big">${e}</div><div class="prompt">${esc(effText(s, e))}</div></div>`;
     const skip = label => `<button class="btn quiet sm" data-act="eff-skip">${label}</button>`;
     switch (e) {
       case 3: { const need = Math.min(2, hidden(op).length), sel = ui.e3 || [];
@@ -1021,23 +1194,27 @@ let sideTab = load("lc_side_tab") === "log" ? "log" : "assist";
 let fxOpen = load("lc_fx_open") ?? true;
 function renderFx(s, busy) {
   const sp = !busy && s.spin ? s.spin : null;
-  const gachi = s.rule === "gachi", mine = P(s, me === -1 ? 0 : me), theirs = P(s, me === -1 ? 1 : 1 - me);
+  const gachi = isPick(s), mine = P(s, me === -1 ? 0 : me), theirs = P(s, me === -1 ? 1 : 1 - me), all = effectsOn(s).length;
   return `<section class="box"><details class="fxbox" id="fxbox" ${fxOpen ? "open" : ""}>
-    <summary><h2>${gachi ? "効果" : "ルーレットの効果"} ${sp && !fxOpen ? `<small>直前 ${sp.n}「${esc(SHORT[sp.n])}」</small>` : gachi ? `<small>残り あなた${NUMS.length - mine.used.length}・${esc(oppName())}${NUMS.length - theirs.used.length}</small>` : ""}</h2></summary>
+    <summary><h2>${gachi ? "効果" : "ルーレットの効果"} ${sp && !fxOpen ? `<small>直前 ${sp.n}「${esc(SHORT[sp.n])}」</small>` : gachi ? `<small>残り あなた${all - mine.used.length}・${esc(oppName())}${all - theirs.used.length}</small>` : ""}</h2></summary>
     <div class="fxbody">
-      <div class="fxgrid">${NUMS.map(n => `<div class="fx ${sp && sp.n === n ? "now" : ""} ${gachi && mine.used.includes(n) ? "used" : ""}" title="${esc(EFFECTS[n])}"><b>${n}</b>${esc(SHORT[n])}${gachi && theirs.used.includes(n) ? `<i class="opu">${esc(oppName())}済</i>` : ""}</div>`).join("")}</div>
+      <div class="fxgrid">${NUMS.map(n => {
+        const off = isChaos(s) && !(s.cfg.weights[n] > 0);
+        const tag = off ? "使わない" : gachi && theirs.used.includes(n) ? `${esc(oppName())}済` : isChaos(s) && !gachi ? `×${s.cfg.weights[n]}` : "";
+        return `<div class="fx ${sp && sp.n === n ? "now" : ""} ${gachi && mine.used.includes(n) ? "used" : ""}${off ? " off" : ""}" title="${esc(effText(s, n))}"><b>${n}</b>${esc(SHORT[n])}${tag ? `<i class="opu">${tag}</i>` : ""}</div>`;
+      }).join("")}</div>
       ${gachi ? `<p class="note">取り消し線 = あなたが使用済み（10個使い切ると全部戻る）。「${esc(oppName())}済」= ${esc(oppName())}が使用済み。</p>` : ""}
-      ${sp ? `<p class="note"><b>${sp.n}</b>（${esc(nm(sp.who, me))}が直前に${sp.chosen ? "選んだ" : "出した"}）${esc(EFFECTS[sp.n])}</p>` : ""}
+      ${sp ? `<p class="note"><b>${sp.n}</b>（${esc(nm(sp.who, me))}が直前に${sp.chosen ? "選んだ" : "出した"}）${esc(effText(s, sp.n))}</p>` : ""}
     </div>
   </details></section>`;
 }
 
 function renderAssist(s, phase, op, mp, over) {
-  if (phase === "setup") return `<section class="box"><h2>推理アシスト</h2><p class="note">ゲームが始まると、${oppName()}の地雷としてあり得る組み合わせ（最初は 45 通り）を、公開された情報から毎ターン数え直して表示します。</p></section>`;
+  if (phase === "setup") return `<section class="box"><h2>推理アシスト</h2><p class="note">ゲームが始まると、${oppName()}の地雷としてあり得る組み合わせ（最初は ${combCount(op)} 通り）を、公開された情報から毎ターン数え直して表示します。</p></section>`;
   // 右列は「相手の推理アシストに映っているのと同じ計算」で、自分の地雷がどれだけ読まれているか
   const r = solve(op), self = me !== -1, mr = self ? solve(mp) : null;
   const cell = (p, tag, cls) => `<span class="cell ${cls} ${p <= 0 ? "zero" : p >= 0.4 ? "hot" : ""}" title="${esc(tag)}"><span class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i><em>${esc(tag)}</em><b class="pv">${pct(p)}</b></span></span>`;
-  const rows = NUMS.map(n => {
+  const rows = numsOf(op).map(n => {
     const c = C(op, n), tags = [];
     if (op.found.includes(n)) tags.push("地雷（判明）");
     else if (c.r) tags.push("公開・地雷ではない");
@@ -1062,16 +1239,16 @@ function renderAssist(s, phase, op, mp, over) {
       <div class="prow2 head"><span></span><span>${oppName()}の地雷 <small>候補 ${r.count}</small></span>${self ? `<span>あなた（${oppName()}から見て） <small>候補 ${mr.count}</small></span>` : ""}</div>
       ${rows}
     </div>
-    <div class="combos">${top.map((c, i) => `<span class="combo ${i === 0 && r.count > 1 ? "top" : ""}"><b>${c.pair[0]}・${c.pair[1]}</b> ${pct(c.pr)}</span>`).join("")}${r.count > top.length ? `<span class="combo">ほか ${r.count - top.length} 通り</span>` : ""}</div>
+    <div class="combos">${top.map((c, i) => `<span class="combo ${i === 0 && r.count > 1 ? "top" : ""}"><b>${c.pair.join("・")}</b> ${pct(c.pr)}</span>`).join("")}${r.count > top.length ? `<span class="combo">ほか ${r.count - top.length} 通り</span>` : ""}</div>
     ${hints.length ? `<p class="note">${oppName()}の地雷のヒント：${hints.join("／")}</p>` : ""}
-    ${op.trumpUsed ? `<p class="note">${oppName()}は切り札を使用済み（入れ替え前後の全パターンを合成して計算）</p>` : ""}
+    ${ep(op) > 0 ? `<p class="note">${oppName()}は切り札を使用済み（入れ替え前後の全パターンを合成して計算）</p>` : ""}
     ${self ? `${myHints.length ? `<p class="note">${oppName()}が得たヒント：${myHints.join("／")}</p>` : ""}<div class="note">あなたの2枚をぴったり当てられる確率 ${pct(ex)}</div><div class="meter"><i style="width:${(ex * 100).toFixed(1)}%"></i></div>` : ""}
   </section>`;
 }
 // p の地雷について公開されたヒント（効果2・3・5・6・7）を表示用の文字列にする
 function hintList(p) {
-  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => MBIG[f.ev], par: f => MPAR[f.ev], dist: f => `${f.x} の差2以内に${f.near ? "あり" : "なし"}` };
-  return p.facts.filter(f => txt[f.t]).map(f => txt[f.t](f) + (p.trumpUsed && f.e === 0 ? "（切り札前）" : ""));
+  const txt = { sum: f => `合計 ${f.s}`, cnt: f => `[${f.ns.join(",")}] に ${f.c} 枚`, big: f => bigTxt(p, f.ev), par: f => parTxt(p, f.ev), dist: f => `${f.x} の差2以内に${f.near ? "あり" : "なし"}` };
+  return p.facts.filter(f => txt[f.t]).map(f => txt[f.t](f) + (ep(p) > f.e ? "（切り札前）" : ""));
 }
 
 // ---------- 進行 ----------
@@ -1103,19 +1280,19 @@ function scheduleCpu() {
   cpuTimer = setTimeout(() => {
     if (!S || S.mode !== "cpu" || S.turn !== 1 || effPhase(S) !== "play") return;
     try { commit(act(S, 1, cpuDecide(S))); }
-    catch (e) { console.error(e); const fallback = S.step === "effect" ? { type: "eff", skip: true } : S.p1.sealed ? { type: "pass" } : S.rule === "gachi" ? { type: "pick", n: NUMS.find(n => !S.p1.used.includes(n)) } : { type: "spin" }; commit(act(S, 1, fallback)); }
+    catch (e) { console.error(e); const fallback = S.step === "effect" ? { type: "eff", skip: true } : S.p1.sealed ? { type: "pass" } : isPick(S) ? { type: "pick", n: effectsOn(S).find(n => !S.p1.used.includes(n)) } : { type: "spin" }; commit(act(S, 1, fallback)); }
   }, wait);
 }
-function startCpu(rule = "normal") {
+function startCpu(rule = "normal", cfg = null) {
   leaveOnline();
-  S = newGame("cpu", "you", "cpu", rule); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null;
+  S = newGame("cpu", "you", "cpu", rule, cfg); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null;
   store("lc_game", S); render();
 }
 function confirmSetup(sel) {
   if (S.mode === "cpu") {
     const s = clone(S);
     s.p0.mines = sel; s.p0.ready = true;
-    const two = [...NUMS].sort(() => Math.random() - .5).slice(0, 2).sort((a, b) => a - b);
+    const two = [...numsOf(s.p1)].sort(() => Math.random() - .5).slice(0, kOf(s.p1)).sort((a, b) => a - b);
     s.p1.mines = two; s.p1.ready = true; startPlay(s);
     commit(s);
   } else if (online.role === "guest") {
@@ -1166,13 +1343,13 @@ function sendState() {
 }
 function newRound() {
   lastSpinId = null;
-  commit(newGame("online", "host", online.conn?.open ? "guest" : null, S.rule));
+  commit(newGame("online", "host", online.conn?.open ? "guest" : null, S.rule, S.cfg));
   ui = { setupSel: [] }; render();
 }
-function createRoom(rule = "normal") {
+function createRoom(rule = "normal", cfg = null) {
   if (!window.Peer) return toast("通信の準備ができていません");
   leaveOnline();
-  openHost(genCode(), rule, null, 0);
+  openHost(genCode(), rule, null, 0, cfg);
 }
 // 閉じる前の部屋を、同じコード・同じ対戦の状態で開き直す
 function resumeHost(r) {
@@ -1181,15 +1358,15 @@ function resumeHost(r) {
   S = r.S; me = 0; screen = "game"; lastSpinId = null;
   ui = S.phase === "setup" && !S.p0.ready ? { setupSel: [] } : {};
   render();
-  openHost(r.code, S.rule, r.S, 0);
+  openHost(r.code, S.rule, r.S, 0, S.cfg);
 }
-function openHost(code, rule, resume, tries) {
+function openHost(code, rule, resume, tries, cfg = null) {
   const peer = new Peer(PEER_PREFIX + code);
   Object.assign(online, { peer, role: "host", code });
   peer.on("open", () => {
     if (online.peer !== peer) return;
     if (resume) { saveOnline(); render(); return toast(S.p1.uid ? "部屋を開き直しました。相手が戻るのを待っています" : "部屋を開き直しました"); }
-    S = newGame("online", "host", null, rule); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null;
+    S = newGame("online", "host", null, rule, cfg); me = 0; ui = { setupSel: [] }; screen = "game"; lastSpinId = null;
     saveOnline(); render();
   });
   peer.on("connection", c => {
@@ -1209,11 +1386,11 @@ function openHost(code, rule, resume, tries) {
     if (online.peer !== peer) return;
     if (e.type === "unavailable-id") {
       try { peer.destroy(); } catch (x) {}
-      if (!resume) return openHost(genCode(), rule, null, 0); // コードが使用中なら別のコードで作り直す
+      if (!resume) return openHost(genCode(), rule, null, 0, cfg); // コードが使用中なら別のコードで作り直す
       // 閉じる前の接続が仲介サーバーにまだ残っている。消えるまで3秒おきに開き直す（最大2分）
       if (tries >= 40) return toast("部屋を開き直せませんでした。少し待ってから、トップの「前回のオンライン対戦に戻る」で試してください");
       if (tries === 0) toast("前の接続が切れるのを待っています…");
-      return setTimeout(() => { if (online.peer === peer) openHost(code, rule, resume, tries + 1); }, 3000);
+      return setTimeout(() => { if (online.peer === peer) openHost(code, rule, resume, tries + 1, cfg); }, 3000);
     }
     console.error(e); toast(peerErr(e));
   });
@@ -1221,8 +1398,8 @@ function openHost(code, rule, resume, tries) {
 function onGuestData(msg) {
   if (online.role !== "host" || !S || S.mode !== "online") return;
   if (msg.t === "setup") {
-    const m = [...new Set(msg.mines || [])].filter(n => NUMS.includes(n)).sort((a, b) => a - b);
-    if (m.length !== 2 || S.p1.ready) return;
+    const m = [...new Set(msg.mines || [])].filter(n => numsOf(S.p1).includes(n)).sort((a, b) => a - b);
+    if (m.length !== kOf(S.p1) || S.p1.ready) return;
     const s = clone(S); s.p1.mines = m; s.p1.ready = true;
     if (bothReady(s)) startPlay(s);
     const sel = ui.setupSel; commit(s);
@@ -1303,9 +1480,12 @@ function renderRules() {
     <ul><li>1・2・4・5・6・10 はすぐに自動で発動します。3・7・8・9 は「使わない」を選んで見送ることもできます。</li>
     <li>シールド（4）は1つ、おとり（9）は2枚まで持てます。3枚目のおとりを仕掛けると古いほうが消え、おとりのカードが公開されたときも消えます。</li><li>おとりの数字を推理して外すと、外した人のカードが公開されます。おとりが踏まれた回数で枚数が決まり、1回目は1枚（通常の外れと同じ）、2回目以降は2枚です。おとりの持ち主だけ地雷が1枚判明している（外した人は0枚）ときは3枚です。ただし、外した人の地雷が確定しないよう、伏せた地雷以外のカードが残りの地雷の枚数より少なくなる分は公開しません。</li>
     <li>封印（10）された人は、次の番ルーレットを回せず、推理かパスだけになります。</li></ul>
-    <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(EFFECTS[n])}</span></li>`).join("")}</ul>
+    <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(effText(S, n))}</span></li>`).join("")}</ul>
     <h3>ガチモード</h3>
     <p>ルーレットの代わりに、1〜10の効果から使うものを自分で選びます。一度使った効果は、10個全部を1回ずつ使い終わるまで使えません（使い切ると全部また使えます）。先攻ハンデが2枚になること以外は、普通ルールと同じです。</p>
+    <h3>ハチャメチャモード</h3>
+    <p>普通ルールを基準に、カードの枚数（6〜16枚）、地雷の数（1〜3枚）、推理ハズレのペナルティ枚数、切り札の回数、ヒント効果（2・3・5・6・7）を使える回数、効果の決め方（ルーレット／自分で選ぶ）、1つの番の行動回数、効果ごとの出やすさを対戦前に決めて遊びます。カードの枚数が変わると、大小ヒントの境目は真ん中より上（例：10枚なら6以上）になります。</p>
+    ${isChaos(S) ? `<p class="note">この対戦の設定：カード${S.cfg.n}枚・地雷${S.cfg.k}枚・ペナルティ${S.cfg.penalty}枚・切り札${S.cfg.trumps}回・ヒント${S.cfg.hintLimit == null ? "無制限" : S.cfg.hintLimit + "回"}・${S.cfg.pick ? "効果は自分で選ぶ" : "ルーレット"}・1つの番に${S.cfg.actions}回行動・出やすさ ${NUMS.map(n => `${n}:${S.cfg.weights[n]}`).join(" ")}</p>` : ""}
     <h3>切り札（1ゲーム1回）</h3>
     <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない公開されていないカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
     <h3>推理アシスト</h3>
@@ -1342,8 +1522,11 @@ document.addEventListener("click", ev => {
       try { navigator.clipboard.writeText(code).then(() => toast("コピーしました"), () => toast("コード: " + code)); } catch (e) { toast("コード: " + code); }
       return;
     }
-    case "setup-random": ui.setupSel = [...NUMS].sort(() => Math.random() - .5).slice(0, 2).sort((x, y) => x - y); return render();
-    case "setup-ok": if ((ui.setupSel || []).length === 2) confirmSetup([...ui.setupSel].sort((x, y) => x - y)); return;
+    case "setup-random": { const p = P(S, me); ui.setupSel = [...numsOf(p)].sort(() => Math.random() - .5).slice(0, kOf(p)).sort((x, y) => x - y); return render(); }
+    case "setup-ok": if ((ui.setupSel || []).length === kOf(P(S, me))) confirmSetup([...ui.setupSel].sort((x, y) => x - y)); return;
+    case "chaos-open": chaosTarget = el.dataset.target === "online" ? "online" : "cpu"; screen = "chaos"; return render();
+    case "chaos-reset": chaosCfg = clone(CHAOS_DEFAULT); store("lc_chaos_cfg", chaosCfg); return render();
+    case "chaos-start": return startChaos();
     case "guess-open": ui = { mode: "guess" }; return render();
     case "trump-open": ui = { mode: "trumpA" }; return render();
     case "cancel": ui = {}; return render();
@@ -1364,7 +1547,7 @@ document.addEventListener("click", ev => {
     case "eff-skip": return doAct({ type: "eff", skip: true });
     case "e3-ok": return doAct({ type: "eff", ns: ui.e3 || [] });
     case "again": {
-      if (S.mode === "cpu") return startCpu(S.rule);
+      if (S.mode === "cpu") return startCpu(S.rule, S.cfg);
       if (online.role === "guest") { online.conn?.send({ t: "again" }); return toast("もう一度の対戦を申し込みました"); }
       return newRound();
     }
@@ -1373,7 +1556,7 @@ document.addEventListener("click", ev => {
       if (phase === "setup") {
         const sel = ui.setupSel || (ui.setupSel = []);
         const i = sel.indexOf(n);
-        if (i >= 0) sel.splice(i, 1); else { if (sel.length >= 2) sel.shift(); sel.push(n); }
+        if (i >= 0) sel.splice(i, 1); else { if (sel.length >= kOf(mp)) sel.shift(); sel.push(n); }
         return render();
       }
       if (ui.mode === "trumpA") { ui = { mode: "trumpB", trumpA: n }; return render(); }
@@ -1388,6 +1571,11 @@ document.addEventListener("toggle", ev => {
   if (ev.target.id !== "fxbox" || ev.target.open === fxOpen) return;
   fxOpen = ev.target.open; store("lc_fx_open", fxOpen); render();
 }, true);
+// ハチャメチャの設定画面のプルダウン
+document.addEventListener("change", ev => {
+  const name = ev.target?.dataset?.cfg;
+  if (name) setChaosField(name, ev.target.value);
+});
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape") { $("#rules").hidden = true; if (ui.mode) { ui = {}; render(); } }
   if (ev.key === "Enter" && ev.target.id === "joinCode") joinRoom(ev.target.value);
