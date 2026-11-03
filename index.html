@@ -474,12 +474,12 @@ function penalty(s, who, cause = "penalty") {
   if (!pool.length) { addLog(s, { k: "nopen", who }); return; }
   reveal(s, who, rnd(pool), cause);
 }
-// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを公開する。普通ルールは1枚、ガチモードは効果を選べる分
-// 先攻がさらに有利なので2枚（CPU同士の対戦で先攻勝率: 普通 約50% / ガチ 1枚だと約62% → 2枚で約52%）。
+// 対戦開始。先攻有利を打ち消すため、先攻の地雷以外のカードを1枚公開する（CPU同士の対戦で先攻勝率: 普通 約49% / ガチ 約53%）。
+// ガチは以前2枚だったが、切り札後の推理を重み付けで直してから2枚だと後攻有利（約46%）になったので1枚に戻した。
 // オンラインでは両者の準備完了を別々のクライアントが書くので、先攻の最初の操作（act）で一度だけ行う
 function startPlay(s) {
   s.phase = "play";
-  if (!s.handicap) { s.handicap = true; for (let i = 0; i < (s.rule === "gachi" ? 2 : 1); i++) penalty(s, 0, "handicap"); }
+  if (!s.handicap) { s.handicap = true; penalty(s, 0, "handicap"); }
 }
 // 封印は「封印された人の次の番」だけ効くので、その人の番が終わるときに解く。
 // ハチャメチャで1つの番に複数回行動できるときは、残りがあれば番を続ける（force = パスなどで番を終える）
@@ -633,6 +633,14 @@ function okAt(pair, facts, e) {
   }
   return true;
 }
+// 切り札は「読まれかけた地雷を、疑われていないカードへ逃がす」ために使われる。そこで、切り札の時点で
+// 相手から見て地雷っぽかった地雷ほど移された、移し先は地雷っぽくなかったカードほど選ばれた、と重み付けする。
+// （一様に扱うと、切り札の後に表示64%の数字が実際は36%しか地雷でないなど高く出すぎていた。この重みでほぼ一致）
+function trumpWeights(as, bs, prob) {
+  const sa = as.reduce((t, a) => t + prob[a], 0);
+  const vb = b => (1 - prob[b]) ** 3, sb = bs.reduce((t, b) => t + vb(b), 0);
+  return [a => sa > 0 ? prob[a] / sa : 1 / as.length, b => sb > 0 ? vb(b) / sb : 1 / bs.length];
+}
 // p: 推理される側のプレイヤー。公開情報（facts / 切り札使用 / 切り札時点の未公開カード）だけを使う
 function solve(p) {
   if (p.k) return solveChaos(p);
@@ -644,15 +652,17 @@ function solve(p) {
   } else {
     // 切り札前の組み合わせ × (どちらの地雷を, どのカードへ移したか) を全部たどって、切り札後の条件で絞る
     const found0 = facts.filter(f => f.e === 0 && f.t === "mine").map(f => f.n);
-    for (const p0 of PAIRS) {
-      if (!okAt(p0, facts, 0)) continue;
+    const pre = PAIRS.filter(p0 => okAt(p0, facts, 0));
+    const prob0 = {}; for (const n of NUMS) prob0[n] = 0;
+    for (const p0 of pre) for (const x of p0) prob0[x] += 1 / pre.length;
+    for (const p0 of pre) {
       const as = p0.filter(x => !found0.includes(x));
       const bs = (p.swapUnrev || []).filter(x => !p0.includes(x));
       if (!as.length || !bs.length) continue;
-      const w = 1 / (as.length * bs.length);
+      const [wa, wb] = trumpWeights(as, bs, prob0);
       for (const a of as) for (const b of bs) {
         const p1 = p0.map(x => x === a ? b : x).sort((x, y) => x - y);
-        if (okAt(p1, facts, 1)) add(p1, w);
+        if (okAt(p1, facts, 1)) add(p1, wa(a) * wb(b));
       }
     }
   }
@@ -682,14 +692,20 @@ function solveChaos(p) {
   for (const c of combos(numsOf(p), p.k)) if (okAtChaos(c, p.facts, 0, p)) W.set(c.join("-"), [c, 1]);
   for (let e = 1; e <= p.trumpCount; e++) {
     const foundBefore = p.facts.filter(f => f.e < e && f.t === "mine").map(f => f.n), unrev = p.swaps[e - 1], next = new Map();
+    // その切り札の時点で相手から見た各数字の地雷確率（重み付けに使う）
+    const prev = {}; let tot = 0;
+    for (const n of numsOf(p)) prev[n] = 0;
+    for (const [c, w] of W.values()) { tot += w; for (const x of c) prev[x] += w; }
+    for (const n of numsOf(p)) prev[n] = tot ? prev[n] / tot : 0;
     for (const [c, w] of W.values()) {
       const as = c.filter(x => !foundBefore.includes(x)), bs = unrev.filter(x => !c.includes(x));
       if (!as.length || !bs.length) continue;
+      const [wa, wb] = trumpWeights(as, bs, prev);
       for (const a of as) for (const b of bs) {
         const c2 = c.map(x => x === a ? b : x).sort((x, y) => x - y);
         if (!okAtChaos(c2, p.facts, e, p)) continue;
         const key = c2.join("-"), cur = next.get(key);
-        next.set(key, [c2, (cur ? cur[1] : 0) + w / (as.length * bs.length)]);
+        next.set(key, [c2, (cur ? cur[1] : 0) + w * wa(a) * wb(b)]);
       }
     }
     W = next;
@@ -1482,7 +1498,7 @@ function renderRules() {
   $("#rules").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="ルール">
     <h2>ルール</h2>
     <h3>準備</h3>
-    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li><li>先攻のほうが有利になりやすいため、対戦開始時に先攻の地雷以外のカードがランダムに公開されます（先攻ハンデ）。普通ルールは1枚、ガチモードは2枚です。</li></ul>
+    <ul><li>2人とも 1〜10 のカード10枚を裏向きで持ちます。</li><li>その中から、当てられてはいけない「地雷」を2枚決めます。</li><li>先攻は、CPU対戦ではあなた、オンライン対戦では部屋を作った人です。</li><li>先攻のほうが有利になりやすいため、対戦開始時に先攻の地雷以外のカードが1枚ランダムに公開されます（先攻ハンデ）。</li></ul>
     <h3>自分の番</h3>
     <ul><li><b>推理</b>か<b>ルーレット</b>のどちらか1つを行います。</li>
     <li><b>推理</b>：相手の地雷だと思う数字を1つ宣言。当たればその地雷は判明。外れると、自分の地雷以外のカードが1枚ランダムに公開されます。</li>
@@ -1495,14 +1511,14 @@ function renderRules() {
     <li>封印（10）された人は、次の番ルーレットを回せず、推理かパスだけになります。</li></ul>
     <ul class="fx">${NUMS.map(n => `<li><b>${n}</b><span>${esc(effText(S, n))}</span></li>`).join("")}</ul>
     <h3>ガチモード</h3>
-    <p>ルーレットの代わりに、1〜10の効果から使うものを自分で選びます。一度使った効果は、10個全部を1回ずつ使い終わるまで使えません（使い切ると全部また使えます）。先攻ハンデが2枚になること以外は、普通ルールと同じです。</p>
+    <p>ルーレットの代わりに、1〜10の効果から使うものを自分で選びます。一度使った効果は、10個全部を1回ずつ使い終わるまで使えません（使い切ると全部また使えます）。それ以外は普通ルールと同じです。</p>
     <h3>ハチャメチャモード</h3>
     <p>普通ルールを基準に、カードの枚数（6〜16枚）、地雷の数（1〜3枚）、推理ハズレのペナルティ枚数、切り札の回数、ヒント効果（2・3・5・6・7）を使える回数、効果の決め方（ルーレット／自分で選ぶ）、1つの番の行動回数、効果ごとの出やすさを対戦前に決めて遊びます。カードの枚数が変わると、大小ヒントの境目は真ん中より上（例：10枚なら6以上）になります。</p>
     ${isChaos(S) ? `<p class="note">この対戦の設定：カード${S.cfg.n}枚・地雷${S.cfg.k}枚・ペナルティ${S.cfg.penalty}枚・切り札${S.cfg.trumps}回・ヒント${S.cfg.hintLimit == null ? "無制限" : S.cfg.hintLimit + "回"}・${S.cfg.pick ? "効果は自分で選ぶ" : "ルーレット"}・1つの番に${S.cfg.actions}回行動・出やすさ ${NUMS.map(n => `${n}:${S.cfg.weights[n]}`).join(" ")}</p>` : ""}
     <h3>切り札（1ゲーム1回）</h3>
     <p>自分の番の最初に、まだ判明していない地雷1枚の役割を、地雷ではない公開されていないカードへこっそり移せます。相手には「使った」ことだけが伝わります。</p>
     <h3>推理アシスト</h3>
-    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・5・6・7のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。</p>
+    <p>公開されたカード、推理のハズレ、判明した地雷、効果2・3・5・6・7のヒントと矛盾しない「相手の地雷の組み合わせ」（最大45通り）をすべて数え上げ、各数字が地雷である確率を表示します。相手が切り札を使ったあとは、入れ替え前の候補と移し先の全パターンを合成して計算します。そのとき、切り札の時点で疑われていた地雷ほど移されやすく、疑われていなかったカードほど移し先に選ばれやすいとみなします。</p>
     <div class="btns"><button class="btn" data-act="close-rules">閉じる</button></div>
   </div>`;
   $("#rules").hidden = false;
